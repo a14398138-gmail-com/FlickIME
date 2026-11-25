@@ -33,6 +33,8 @@ class KeyDef(
     val primary: Boolean = false,
     /** Long-press choices (Gboard style); the first one is drawn as a hint in the corner. */
     val longPress: List<String>? = null,
+    /** Long-press choices while shifted, for symbol keys whose shifted label is another symbol. */
+    val shiftedLongPress: List<String>? = null,
 ) {
     val letter: Char? get() = if (action == Action.Input && label.length == 1 && label[0] in 'a'..'z') label[0] else null
 }
@@ -95,11 +97,17 @@ object Layouts {
         '1' to listOf("¹", "₁"), '2' to listOf("²", "₂"), '3' to listOf("³", "₃"), '4' to listOf("⁴", "₄"),
         '5' to listOf("⁵", "₅"), '6' to listOf("⁶", "₆"), '7' to listOf("⁷", "₇"), '8' to listOf("⁸", "₈"),
         '9' to listOf("⁹", "₉"), '0' to listOf("⁰", "₀"),
-        // symbol keys (Gboard-style math / dash variants)
-        '=' to listOf("≠", "≈", "∞", "±"), '-' to listOf("–", "—", "_", "·"), '/' to listOf("÷", "\\"),
-        '[' to listOf("「", "【", "〈"), ']' to listOf("」", "】", "〉"),
+        // symbol keys: the more-keys of Gboard's / LatinIME's symbol pages (rowkeys_symbols*.xml)
+        '=' to listOf("≠", "≈", "∞"), '-' to listOf("_", "–", "—", "·"), '\'' to listOf("‘", "’", "‹", "›"),
         // period (LatinIME morekeys_punctuation)
         '.' to listOf(",", "?", "!", "#", ")", "(", "/", ";", "'", "@", ":", "-", "\"", "+", "%", "&"),
+    )
+
+    /** The same for the shifted symbols of the number row and punctuation keys (LatinIME symbol pages). */
+    private val SHIFTED_LONG_PRESS: Map<Char, List<String>> = mapOf(
+        '!' to listOf("¡"), '$' to listOf("¢", "£", "€", "¥", "₱"), '%' to listOf("‰"), '^' to listOf("↑", "↓", "←", "→"),
+        '*' to listOf("†", "‡", "★"), '(' to listOf("<", "{", "["), ')' to listOf(">", "}", "]"), '+' to listOf("±"),
+        '"' to listOf("“", "”", "«", "»"), '?' to listOf("¿"),
     )
 
     /** Full QWERTY like Gboard's English layout, with glide typing. */
@@ -108,7 +116,8 @@ object Layouts {
         val keys = ArrayList<KeyDef>()
         fun row(r: Int, start: Float, normal: String, shifted: String) {
             normal.forEachIndexed { i, ch ->
-                keys.add(KeyDef(start + i * u, u, r, ch.toString(), shifted = shifted[i].toString(), longPress = LONG_PRESS[ch]))
+                keys.add(KeyDef(start + i * u, u, r, ch.toString(), shifted = shifted[i].toString(), longPress = LONG_PRESS[ch],
+                    shiftedLongPress = if (ch.isLetter()) null else SHIFTED_LONG_PRESS[shifted[i]]))
             }
         }
         row(0, 0f, "`1234567890-=", "~!@#$%^&*()_+")

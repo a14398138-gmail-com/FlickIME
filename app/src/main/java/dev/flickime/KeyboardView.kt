@@ -232,7 +232,7 @@ class KeyboardView(context: Context, private val listener: Listener, private val
     private var lpMoved = false
     private val longPress = Runnable {
         val k = pressed ?: return@Runnable
-        val opts = k.longPress ?: return@Runnable
+        val opts = longPressOf(k) ?: return@Runnable
         if (gliding || spaceDrag) return@Runnable
         lpOptions = opts.map { o -> if (shift > 0 && o.length == 1 && o[0].isLetter()) o[0].uppercaseChar().toString() else o }
         val r = rectOf(k)
@@ -249,6 +249,10 @@ class KeyboardView(context: Context, private val listener: Listener, private val
         performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
         redraw()
     }
+
+    /** Shifted symbol keys (= → +) have their own choices, or none. */
+    private fun longPressOf(k: KeyDef): List<String>? =
+        if (shift > 0 && k.letter == null && k.shifted != null && k.shifted != k.label) k.shiftedLongPress else k.longPress
 
     private val lpPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
@@ -293,7 +297,7 @@ class KeyboardView(context: Context, private val listener: Listener, private val
         }
         if (pressed?.action == Action.Shift) { shiftLongPressed = false; repeat.postDelayed(shiftLock, 400) }
         lpOpen = false
-        if (pressed?.longPress != null) repeat.postDelayed(longPress, 350)
+        if (pressed?.let(::longPressOf) != null) repeat.postDelayed(longPress, 350)
         redraw()
     }
 
