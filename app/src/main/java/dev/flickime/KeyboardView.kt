@@ -66,7 +66,7 @@ class KeyboardView(context: Context, private val listener: Listener, private val
 
     private val repeat = Handler(Looper.getMainLooper())
     /** Key that repeats while held: ⌫, and ◀▶ (cursor) */
-    private var repeatAction = Action.Backspace
+    private var repeatAction: Action = Action.Backspace
     private val repeater = object : Runnable {
         override fun run() {
             listener.onAction(repeatAction)
