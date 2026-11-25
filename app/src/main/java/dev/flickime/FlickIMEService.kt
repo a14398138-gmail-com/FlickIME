@@ -941,18 +941,9 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
                     else sendKey(KeyEvent.KEYCODE_ENTER)
                 }
             }
-            // like Gboard: before converting, ◀▶ move the cursor inside the composition;
-            // once converting (space pressed / boundary being set), they move the segment boundary
-            Action.Left -> when {
-                reading.isEmpty() -> sendKey(KeyEvent.KEYCODE_DPAD_LEFT)
-                selected >= 0 || segLen > 0 -> moveBoundary(-1)
-                else -> moveCaret(-1)
-            }
-            Action.Right -> when {
-                reading.isEmpty() -> sendKey(KeyEvent.KEYCODE_DPAD_RIGHT)
-                selected >= 0 || segLen > 0 -> moveBoundary(+1)
-                else -> moveCaret(+1)
-            }
+            // like Gboard: ◀▶ set where the first segment ends (the cursor inside the composition moves by tapping)
+            Action.Left -> if (reading.isEmpty()) sendKey(KeyEvent.KEYCODE_DPAD_LEFT) else moveBoundary(-1)
+            Action.Right -> if (reading.isEmpty()) sendKey(KeyEvent.KEYCODE_DPAD_RIGHT) else moveBoundary(+1)
             Action.Mode -> {
                 if (reading.isNotEmpty()) { if (selected >= 0) commitCandidate(selected) else commitKana() }
                 mode = if (mode == Mode.KANA) Mode.ALPHA else Mode.KANA
@@ -1116,8 +1107,13 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     private fun moveBoundary(delta: Int) {
         val n = reading.length
         if (n < 2 && delta < 0) return
-        val base = if (segLen > 0) segLen else
-            runCatching { Engine.get(applicationContext).firstSegmentLength(reading.toString()) }.getOrDefault(n)
+        // like Gboard: before converting, the whole reading is one segment and ◀ shrinks it from the end;
+        // while converting (space pressed), start from where the converter put the first boundary
+        val base = when {
+            segLen > 0 -> segLen
+            selected >= 0 -> runCatching { Engine.get(applicationContext).firstSegmentLength(reading.toString()) }.getOrDefault(n)
+            else -> n
+        }
         val next = (base + delta).coerceIn(1, n)
         if (next == segLen) return
         segLen = next
