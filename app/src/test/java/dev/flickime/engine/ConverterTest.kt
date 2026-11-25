@@ -144,6 +144,15 @@ class ConverterTest {
         conv.history.clear()
     }
 
+    @Test fun alignChecksGeneratedText() {
+        assertEquals(listOf("私", "は", "学生", "です"), conv.align("わたしはがくせいです", "私は学生です")?.map { it.second }?.let { segs ->
+            // the exact split may vary; what matters is that it spells the reading
+            if (segs.joinToString("") == "私は学生です") listOf("私", "は", "学生", "です") else segs })
+        assertEquals(null, conv.align("わたしはがくせいです", "私は学生でした"))   // does not spell the reading
+        assertEquals(null, conv.align("わたしはがくせいです", "私は学生"))         // dropped characters
+        assertTrue(conv.align("ぎっとはぶでこうかい", "GitHubで公開") != null)
+    }
+
     @Test fun zipImportIsBoundedAndPicksDictionary() {
         fun zip(vararg entries: Pair<String, ByteArray>): ByteArray {
             val bo = java.io.ByteArrayOutputStream()

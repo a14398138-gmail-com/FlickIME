@@ -417,8 +417,11 @@ class Converter(
         val version = cacheVersion
         // optionally zenz's own greedy output joins the candidates (it can be outside the N-best);
         // it has no n-gram score, so it gets the worst one plus a penalty
-        val gen = if (zenzGenerate) z.generate(reading, context)?.takeIf { g -> base.none { it.surface == g } } else null
-        val all = if (gen != null) base + Sentence(listOf(reading.length to gen), base.last().score + zenzGenPenalty) else base
+        // only if it really spells the reading (generation can drop or add characters); the alignment
+        // also gives it word segments, so ◀▶ and learning work on it like on any other candidate
+        val gen = if (zenzGenerate && reading.length >= 2) z.generate(reading, context)
+            ?.takeIf { g -> base.none { it.surface == g } }?.let { g -> align(reading, g) } else null
+        val all = if (gen != null) base + Sentence(gen, base.last().score + zenzGenPenalty) else base
         val nll = z.score(reading, context, all.map { it.surface }) ?: return false
         val ranked = all.indices.sortedBy { all[it].score * zenzWeight / 1000f + nll[it] }.map { all[it] }
         synchronized(this) {
@@ -426,6 +429,45 @@ class Converter(
             zenzCache[zkey(reading, context)] = ranked
         }
         return ranked.first() !== base.first()
+    }
+
+    /**
+     * Splits [surface] into words that each spell a piece of [reading] (dictionary or user words, the kana
+     * themselves in hiragana or katakana, English words, symbols, or the same character); null if it cannot.
+     */
+    fun align(reading: String, surface: String): List<Pair<Int, String>>? {
+        val n = reading.length; val m = surface.length
+        // back[i][j]: how (i, j) was reached; -1 = not reachable
+        val prevI = Array(n + 1) { IntArray(m + 1) { -1 } }
+        val prevJ = Array(n + 1) { IntArray(m + 1) { -1 } }
+        val seen = Array(n + 1) { BooleanArray(m + 1) }
+        seen[0][0] = true
+        for (i in 0 until n) {
+            val js = (0..m).filter { seen[i][it] }
+            if (js.isEmpty()) continue
+            // every way a piece of the reading starting here can be written (computed once per position)
+            val ways = ArrayList<Pair<Int, String>>()
+            ways.add(1 to reading[i].toString())
+            for (len in 1..minOf(n - i, 32)) {
+                val r = reading.substring(i, i + len)
+                ways.add(len to r); ways.add(len to Kana.toKatakana(r))
+                dict.range(reading, i, len)?.let { range -> for (e in range) ways.add(len to dict.surface(e)) }
+                userDict.lookup(r).forEach { ways.add(len to it.surface) }
+                english[r]?.forEach { ways.add(len to it) }
+                symbols[r]?.forEach { ways.add(len to it) }
+            }
+            for (j in js) for ((len, w) in ways) {
+                if (w.isEmpty() || !surface.startsWith(w, j)) continue
+                val i2 = i + len; val j2 = j + w.length
+                if (!seen[i2][j2]) { seen[i2][j2] = true; prevI[i2][j2] = i; prevJ[i2][j2] = j }
+            }
+        }
+        if (!seen[n][m]) return null
+        val segs = ArrayList<Pair<Int, String>>()
+        var i = n; var j = m
+        while (i > 0) { val pi = prevI[i][j]; val pj = prevJ[i][j]; segs.add((i - pi) to surface.substring(pj, j)); i = pi; j = pj }
+        segs.reverse()
+        return segs
     }
 
     private fun ngramSentences(reading: String): List<Sentence> {

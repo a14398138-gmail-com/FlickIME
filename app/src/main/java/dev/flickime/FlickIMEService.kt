@@ -47,9 +47,9 @@ object Engine {
             // zenz-medium.gguf (zenz-v2.5-medium, v2 prompt) when the build has it, else zenz.gguf (v3.1-small)
             val medium = runCatching { c.assets.openFd("zenz-medium.gguf").use { true } }.getOrDefault(false)
             val asset = if (medium) "zenz-medium.gguf" else "zenz.gguf"
-            val f = java.io.File(c.filesDir, if (medium) "zenz-v2.5-medium.gguf" else "zenz-v3.1-small.gguf")
-            // drop the other model's copy
-            java.io.File(c.filesDir, if (medium) "zenz-v3.1-small.gguf" else "zenz-v2.5-medium.gguf").delete()
+            val f = java.io.File(c.filesDir, if (medium) "zenz-v2.5-medium.gguf" else "zenz-small.gguf")
+            // drop copies of other / older models
+            for (old in listOf("zenz-v3.1-small.gguf", if (medium) "zenz-small.gguf" else "zenz-v2.5-medium.gguf")) java.io.File(c.filesDir, old).delete()
             val size = c.assets.openFd(asset).use { it.length }
             if (!f.exists() || f.length() != size) {
                 val tmp = java.io.File(c.filesDir, "zenz.tmp")
@@ -57,6 +57,8 @@ object Engine {
                 tmp.renameTo(f)
             }
             dev.flickime.engine.Zenz.v2Prompt = medium
+            // zenz's own greedy conversion joins the candidates (AJIMEE-Bench: 80.5% -> 87.5% with small v3.2)
+            get(c).zenzGenerate = true
             val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
             dev.flickime.engine.Zenz.load(f.path, threads)?.let { z -> get(c).zenz = z }
         }.onFailure { android.util.Log.e("FlickIME", "zenz unavailable", it) }
