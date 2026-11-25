@@ -5,11 +5,12 @@ usage: build_predict_eval.py LOG.jsonl OUT_DIR
 
 Writes OUT_DIR/events.jsonl: every usable commit in time order, one per line:
   {"i", "ts", "split": "warm"|"dev"|"test", "context", "reading", "surface", "kind", "target": bool}
-- commits flagged with 👎 and commits deleted right afterwards (a correction removing >= half of it) are dropped:
+- commits deleted right afterwards (a correction removing >= half of it) are dropped:
   they were wrong, so they are neither learned nor scored
 - "target": scored for prediction (2..12 reading chars, surface is not just the kana / a symbol)
 - split by time: first 60% "warm" (only learned), next 20% "dev" (tune on this), last 20% "test" (report only)
-Also writes OUT_DIR/events.tsv (same rows, for the JVM test) and OUT_DIR/summary.json.
+Also writes OUT_DIR/bad.tsv (👎 reports: reading, the answer the user then committed, context, shown candidates),
+OUT_DIR/events.tsv (same rows, for the JVM test) and OUT_DIR/summary.json.
 """
 import json, sys, os, re
 
@@ -20,8 +21,6 @@ commits = sorted((r for r in rows if r.get('type', 'commit') == 'commit'), key=l
 wrong = set()
 for r in rows:
     if r.get('type') == 'correction' and len(r.get('deleted', '')) * 2 >= len(r.get('committed', '')) > 0:
-        wrong.add(r['ref'])
-    if r.get('type') == 'bad':  # flagged with 👎 on the keyboard
         wrong.add(r['ref'])
 
 KANA = re.compile(r'^[ぁ-ゖーァ-ヺ]+$')
@@ -56,8 +55,14 @@ def esc(x): return x.replace('\\', '\\\\').replace('\t', '\\t').replace('\n', '\
 with open(os.path.join(out, 'events.tsv'), 'w', encoding='utf-8') as f:
     for e in events:
         f.write('\t'.join([str(e['i']), e['split'], '1' if e['target'] else '0', esc(e['reading']), esc(e['surface']), e['kind'], esc(e['context'])]) + '\n')
+# 👎 reports: conversions where no candidate was right, with the answer committed afterwards
+bad = [r for r in rows if r.get('type') == 'bad' and r.get('answer')]
+with open(os.path.join(out, 'bad.tsv'), 'w', encoding='utf-8') as f:
+    for r in bad:
+        f.write('\t'.join([esc(r['reading']), esc(r['answer']), esc(r.get('context_before', '')), esc(' / '.join(r.get('shown', [])))]) + '\n')
 summary = {s: {'events': sum(e['split'] == s for e in events), 'targets': sum(e['split'] == s and e['target'] for e in events)}
            for s in ('warm', 'dev', 'test')}
 summary['dropped_corrected'] = len(wrong)
+summary['bad_reports'] = len(bad)
 json.dump(summary, open(os.path.join(out, 'summary.json'), 'w'), indent=1)
 print(json.dumps(summary))
