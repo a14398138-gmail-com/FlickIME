@@ -168,27 +168,14 @@ class SettingsActivity : Activity() {
         })
 
         col.addView(text("定型文", 20f))
-        col.addView(text("キーボードの候補バーの📝から入力できます。", 13f))
-        val snippetIn = EditText(this).apply { hint = "定型文（改行も可）" }
+        col.addView(text("キーボードの候補バーの📝を押すと、ここで登録したテキストがそのまま入力されます。", 13f))
+        val snippetIn = EditText(this).apply { hint = "登録するテキスト（改行も可）"; setText(SnippetStore.load(this@SettingsActivity).firstOrNull().orEmpty()) }
         col.addView(snippetIn)
-        val snippetRows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        fun showSnippets() {
-            snippetRows.removeAllViews()
-            val items = SnippetStore.load(this)
-            items.forEachIndexed { i, t ->
-                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL }
-                row.addView(text(t), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-                row.addView(button("削除") { SnippetStore.save(this, items.filterIndexed { j, _ -> j != i }); showSnippets() })
-                snippetRows.addView(row)
-            }
-        }
-        col.addView(button("定型文を追加") {
+        col.addView(button("定型文を保存") {
             val t = snippetIn.text.toString()
-            if (t.isBlank()) toast("定型文を入力してください")
-            else { SnippetStore.save(this, SnippetStore.load(this) + t); snippetIn.setText(""); showSnippets() }
+            SnippetStore.save(this, if (t.isEmpty()) emptyList() else listOf(t))
+            toast(if (t.isEmpty()) "定型文を消しました" else "保存しました")
         })
-        col.addView(snippetRows)
-        showSnippets()
 
         col.addView(text("クリップボード", 20f))
         col.addView(text("コピーしたテキストは、候補バー左の📋から呼び出せます（最大30件＋固定したもの、端末内に暗号化して保存）。パスワード管理アプリなどが「機密」としてコピーしたものは保存しません。", 13f))

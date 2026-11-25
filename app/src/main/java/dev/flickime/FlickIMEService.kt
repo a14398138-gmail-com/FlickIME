@@ -629,7 +629,12 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
             text = "📝"; gravity = Gravity.CENTER
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
             contentDescription = "定型文"
-            setOnClickListener { showSnippets(!snippetOpen) }
+            // one registered text, typed straight away (set it in the settings screen)
+            setOnClickListener {
+                val t = SnippetStore.load(this@FlickIMEService).firstOrNull()
+                if (t.isNullOrEmpty()) android.widget.Toast.makeText(this@FlickIMEService, "設定画面の「定型文」で登録してください", android.widget.Toast.LENGTH_SHORT).show()
+                else { if (reading.isNotEmpty()) commitKana(); currentInputConnection?.commitText(t, 1) }
+            }
         }
         bar.addView(snippetButton, LinearLayout.LayoutParams((44 * dp).toInt(), LinearLayout.LayoutParams.MATCH_PARENT))
         clipChip = TextView(this).apply {
