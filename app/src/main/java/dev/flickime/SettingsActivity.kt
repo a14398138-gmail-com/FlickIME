@@ -102,6 +102,14 @@ class SettingsActivity : Activity() {
         })
         col.addView(EditText(this).apply { hint = "ここで試し打ち" })
 
+        col.addView(text("変換", 20f))
+        col.addView(Switch(this).apply {
+            text = "zenz（ニューラル変換）で候補を並べ替える"
+            isChecked = Prefs.zenzEnabled(this@SettingsActivity)
+            setOnCheckedChangeListener { _, v -> Prefs.setZenzEnabled(this@SettingsActivity, v) }
+        })
+        col.addView(text("入力が少し止まったときに、文の候補をzenzで並べ替えます。オフにすると電池とメモリを節約できます（キーボードの再起動後に反映）。", 13f))
+
         col.addView(text("ユーザー辞書", 20f))
         col.addView(text("候補に出なかった語を区切って確定（例: 思想史＋学）すると、読み全体の単語として自動で登録されます。", 13f))
         col.addView(text("Gboardの書き出し（zip / dictionary.txt）、Google日本語入力・Mozcの書き出し、MS-IMEのtxt、「読み<TAB>単語」のテキストを読み込めます。", 13f))
@@ -152,7 +160,7 @@ class SettingsActivity : Activity() {
             }
         })
         col.addView(text("書き出したファイルは暗号化されていません。扱いに注意してください。ログの鍵はこの端末のキーストアにあり、アプリを削除すると暗号化ログは読めなくなります。", 13f))
-        col.addView(text("辞書: Mozc dictionary_oss（BSD / IPAdic）、英単語: JMdict（EDRDG, CC BY-SA 4.0）、wordfreq（CC BY-SA 4.0）、言語モデル: Wikipedia（CC BY-SA）・Tatoeba（CC BY 2.0 FR）", 12f))
+        col.addView(text("辞書: Mozc dictionary_oss（BSD / IPAdic）、英単語: JMdict（EDRDG, CC BY-SA 4.0）、wordfreq（CC BY-SA 4.0）、言語モデル: Wikipedia（CC BY-SA）・Tatoeba（CC BY 2.0 FR）、zenz-v3.1-small（三輪敬太, CC BY-SA 4.0）、llama.cpp（MIT）", 12f))
         setContentView(ScrollView(this).apply { addView(col) })
     }
 

@@ -35,6 +35,26 @@ import java.util.concurrent.Executors
 /** Loads the dictionary once per process. */
 object Engine {
     @Volatile var converter: Converter? = null
+    @Volatile private var zenzTried = false
+
+    /** Loads zenz into the converter (slow; call off the main thread). */
+    fun loadZenz(c: Context) {
+        if (zenzTried) return
+        zenzTried = true
+        runCatching {
+            System.loadLibrary("zenzjni")
+            // llama.cpp needs a real file: copy the model out of the APK once
+            val f = java.io.File(c.filesDir, "zenz-v3.1-small.gguf")
+            val size = c.assets.openFd("zenz.gguf").use { it.length }
+            if (!f.exists() || f.length() != size) {
+                val tmp = java.io.File(c.filesDir, "zenz.tmp")
+                c.assets.open("zenz.gguf").use { i -> tmp.outputStream().use { o -> i.copyTo(o, 1 shl 16) } }
+                tmp.renameTo(f)
+            }
+            val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
+            dev.flickime.engine.Zenz.load(f.path, threads)?.let { z -> get(c).zenz = z }
+        }.onFailure { android.util.Log.e("FlickIME", "zenz unavailable", it) }
+    }
     @Volatile private var glide: GlideDecoder? = null
 
     fun glide(c: Context): GlideDecoder = glide ?: synchronized(this) {
@@ -68,10 +88,10 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
 
     private lateinit var keyboard: KeyboardView
     private lateinit var candRow: LinearLayout
-    private lateinit var candScroll: HorizontalScrollView
+    private lateinit var candScroll: SwipeHorizontalScrollView
     private lateinit var log: CommitLog
     private lateinit var expandButton: TextView
-    private lateinit var panel: ScrollView
+    private lateinit var panel: SwipeScrollView
     private lateinit var flow: FlowLayout
     private var expanded = false
 
@@ -84,6 +104,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     private var segLen = 0
     private var themeKey = ""
     private val barViews = ArrayList<TextView>()
+    private var lastRendered: List<Candidate>? = null
     private var privateField = false
     private var historyDirty = false
 
@@ -389,8 +410,41 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         worker.execute { ClipStore.save(applicationContext, snapshot) }
     }
 
+    // ---- zenz: re-rank after a short pause in typing ----
+    private val zenzWorker = Executors.newSingleThreadExecutor()
+    /** Text before the composition (zenz uses it as left context). */
+    private var compositionContext = ""
+    private var zenzPending: Runnable? = null
+
+    private fun captureContext() {
+        compositionContext = currentInputConnection?.getTextBeforeCursor(40, 0)?.toString().orEmpty()
+    }
+
+    private fun scheduleZenz(r: String, my: Int) {
+        zenzPending?.let { main.removeCallbacks(it) }
+        if (!Prefs.zenzEnabled(this) || r.length < 2 || segLen > 0) return
+        val ctx = if (privateField) "" else compositionContext
+        val job = Runnable {
+            zenzWorker.execute {
+                if (my != seq) return@execute
+                val conv = Engine.converter ?: return@execute
+                if (conv.zenz == null || conv.zenzRanked(r)) return@execute
+                if (!conv.zenzRerank(r, ctx)) return@execute
+                worker.execute {
+                    if (my != seq) return@execute
+                    val cands = runCatching { conv.candidates(r) }.getOrNull() ?: return@execute
+                    // only while the user hasn't started picking: no jumping under their finger
+                    main.post { if (my == seq && selected < 0 && !expanded && reading.toString() == r) { candidates = cands; renderCandidates() } }
+                }
+            }
+        }
+        zenzPending = job
+        main.postDelayed(job, 120)
+    }
+
     override fun onCreate() {
         super.onCreate()
+        if (Prefs.zenzEnabled(this)) zenzWorker.execute { Engine.loadZenz(applicationContext) }
         clipboard.addPrimaryClipChangedListener(clipListener)
         worker.execute { val loaded = ClipStore.load(applicationContext); main.post { clips.addAll(0, loaded.filter { l -> clips.none { it.text == l.text } }) } }
         log = CommitLog(this)
@@ -517,10 +571,11 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         }
         val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         candRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        candScroll = HorizontalScrollView(this).apply {
+        candScroll = SwipeHorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             addView(candRow)
-            setOnTouchListener(swipeDetector(onUp = { expand(true) }, onDown = { expand(false) }))
+            onSwipeUp = { if (candidates.isNotEmpty()) { expand(true); true } else false }
+            onSwipeDown = { if (expanded) { expand(false); true } else false }
         }
         clipButton = TextView(this).apply {
             text = "📋"; gravity = Gravity.CENTER
@@ -567,11 +622,11 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         body.addView(keyboard)
         flow = FlowLayout(this).apply { rowHeight = (48 * dp).toInt() }
         if (theme.glass) flow.setBackgroundColor(Color.argb(if (night) 60 else 90, 255, 255, 255))
-        panel = ScrollView(this).apply {
+        panel = SwipeScrollView(this).apply {
             addView(flow)
             visibility = View.GONE
-            // pulling down while already at the top closes the panel
-            setOnTouchListener(swipeDetector(onUp = null, onDown = { if (scrollY == 0) expand(false) }))
+            // pulling down while already at the top closes the panel; otherwise it just scrolls
+            onSwipeDown = { if (scrollY == 0) { expand(false); true } else false }
         }
         body.addView(panel, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, (4 * 56 * dp).toInt()))
         clipList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, (4 * dp).toInt(), 0, (4 * dp).toInt()) }
@@ -610,24 +665,6 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     private fun opaque(d: android.graphics.drawable.Drawable) = android.graphics.drawable.LayerDrawable(arrayOf(
         android.graphics.drawable.ColorDrawable(if (night) Color.rgb(14, 16, 28) else Color.rgb(222, 228, 242)), d,
     ))
-
-    /** Vertical swipe detector that leaves horizontal scrolling / taps alone. */
-    private fun swipeDetector(onUp: (() -> Unit)?, onDown: (() -> Unit)?): View.OnTouchListener {
-        var x0 = 0f; var y0 = 0f; var fired = false
-        return View.OnTouchListener { _, e ->
-            when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { x0 = e.rawX; y0 = e.rawY; fired = false }
-                MotionEvent.ACTION_MOVE -> if (!fired) {
-                    val dx = e.rawX - x0; val dy = e.rawY - y0
-                    if (kotlin.math.abs(dy) > 28 * dp && kotlin.math.abs(dy) > kotlin.math.abs(dx) * 1.5f) {
-                        if (dy < 0 && onUp != null) { fired = true; onUp() }
-                        else if (dy > 0 && onDown != null) { fired = true; onDown() }
-                    }
-                }
-            }
-            fired
-        }
-    }
 
     private fun expand(on: Boolean) {
         val want = on && candidates.isNotEmpty()
@@ -694,6 +731,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         runCatching { clipboard.removePrimaryClipChangedListener(clipListener) }
         saveHistory()
         worker.shutdown()
+        zenzWorker.shutdown()
         super.onDestroy()
     }
 
@@ -762,6 +800,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         if (selected >= 0) commitCandidate(selected)
         if (compReading != null) resetCompound()
         segLen = 0
+        if (reading.isEmpty()) captureContext()
         reading.append(text)
         refresh()
     }
@@ -849,9 +888,11 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     override fun onUpdateSelection(oldSelStart: Int, oldSelEnd: Int, newSelStart: Int, newSelEnd: Int,
                                    candidatesStart: Int, candidatesEnd: Int) {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
-        val cursorInComposition = candidatesStart >= 0 && newSelStart == newSelEnd &&
-            newSelStart >= candidatesStart && newSelEnd <= candidatesEnd
-        if (reading.isNotEmpty() && !cursorInComposition) {
+        // While our own commit/composing edits are in flight the editor briefly reports no
+        // composing region (candidatesStart < 0); that is not the user moving the cursor.
+        val movedOutside = candidatesStart >= 0 &&
+            (newSelStart != newSelEnd || newSelStart < candidatesStart || newSelEnd > candidatesEnd)
+        if (reading.isNotEmpty() && movedOutside) {
             currentInputConnection?.finishComposingText()
             seq++
             reading.setLength(0); candidates = emptyList(); selected = -1; segLen = 0
@@ -926,7 +967,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
                 listOf(Candidate(r, r.length, Candidate.Kind.KANA), Candidate(Kana.toKatakana(r), r.length, Candidate.Kind.KANA))
             }
             main.post {
-                if (my == seq) { candidates = cands; renderCandidates() }
+                if (my == seq) { candidates = cands; renderCandidates(); scheduleZenz(r, my) }
             }
         }
     }
@@ -976,6 +1017,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         reading.delete(0, c.consumed)
         selected = -1
         segLen = 0
+        if (reading.isNotEmpty()) captureContext()
         keyboard.composing = reading.isNotEmpty()
         if (reading.isEmpty()) {
             val added = finishCompound()
@@ -1009,6 +1051,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         if (clipOpen && candidates.isNotEmpty()) showClips(false)
         if (candidates.isEmpty()) expand(false) else if (expanded) renderPanel()
         if (selected >= 0) barViews.getOrNull(selected)?.let { v -> candScroll.post { candScroll.smoothScrollTo(maxOf(0, v.left - (40 * dp).toInt()), 0) } }
-        else candScroll.scrollTo(0, 0)
+        else if (candidates !== lastRendered) candScroll.scrollTo(0, 0)
+        lastRendered = candidates
     }
 }

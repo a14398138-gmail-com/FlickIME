@@ -132,7 +132,7 @@ class Converter(
 ) {
     /** How much the language model counts against the dictionary costs when ranking sentences. */
     var lmWeight = DEFAULT_LM_WEIGHT
-        set(v) { field = v; synchronized(this) { cache.clear() } }
+        set(v) { field = v; synchronized(this) { cache.clear(); zenzCache.clear() } }
 
     /** [entry] >= 0 points into the system dictionary; otherwise [text] holds the surface. */
     private class Node(
@@ -307,11 +307,49 @@ class Converter(
     }
     private var cacheVersion = -1L
 
-    /** Whole-reading conversions, best first (re-ranked by the language model when present). */
+    /** Neural re-ranker (optional). */
+    @Volatile var zenz: Zenz? = null
+    /** Weight of the n-gram score (per 1000) against zenz's log-likelihood (nats). */
+    var zenzWeight = 0.3f
+    private val zenzCache = object : LinkedHashMap<String, List<Sentence>>(32, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<Sentence>>?) = size > 24
+    }
+
+    private fun checkVersion() {
+        val v = history.version.toLong() * 1_000_003L + userDict.version
+        if (v != cacheVersion) { cache.clear(); zenzCache.clear(); cacheVersion = v }
+    }
+
+    /** Whole-reading conversions, best first (zenz order when it has run for this reading). */
     @Synchronized fun sentences(reading: String): List<Sentence> {
         if (reading.isEmpty()) return emptyList()
-        val v = history.version.toLong() * 1_000_003L + userDict.version
-        if (v != cacheVersion) { cache.clear(); cacheVersion = v }
+        checkVersion()
+        zenzCache[reading]?.let { return it }
+        return ngramSentences(reading)
+    }
+
+    /** Has zenz already ranked this reading? */
+    @Synchronized fun zenzRanked(reading: String): Boolean { checkVersion(); return zenzCache.containsKey(reading) }
+
+    /**
+     * Re-ranks the sentence candidates of [reading] with zenz (slow: call off the typing thread).
+     * Returns true if the best sentence changed.
+     */
+    fun zenzRerank(reading: String, context: String): Boolean {
+        val z = zenz ?: return false
+        val base = synchronized(this) { checkVersion(); ngramSentences(reading) }
+        if (base.size < 2) return false
+        val version = cacheVersion
+        val nll = z.score(reading, context, base.map { it.surface }) ?: return false
+        val ranked = base.indices.sortedBy { base[it].score * zenzWeight / 1000f + nll[it] }.map { base[it] }
+        synchronized(this) {
+            if (version != cacheVersion) return false
+            zenzCache[reading] = ranked
+        }
+        return ranked.first() !== base.first()
+    }
+
+    private fun ngramSentences(reading: String): List<Sentence> {
         cache[reading]?.let { return it }
         val lat = build(reading)
         val result = if (lm == null) {

@@ -87,6 +87,8 @@ object Prefs {
     fun floatPos(c: Context) = p(c).getFloat("float_x" + sfx(c), -1f) to p(c).getFloat("float_y" + sfx(c), -1f)
     fun setFloatPos(c: Context, x: Float, y: Float) =
         p(c).edit().putFloat("float_x" + sfx(c), x).putFloat("float_y" + sfx(c), y).apply()
+    fun zenzEnabled(c: Context) = p(c).getBoolean("zenz", true)
+    fun setZenzEnabled(c: Context, v: Boolean) = p(c).edit().putBoolean("zenz", v).apply()
     const val DEFAULT_FLICK_DP = 22
     fun flickThresholdDp(c: Context) = p(c).getInt("flick_dp", DEFAULT_FLICK_DP)
     fun setFlickThresholdDp(c: Context, v: Int) = p(c).edit().putInt("flick_dp", v).apply()

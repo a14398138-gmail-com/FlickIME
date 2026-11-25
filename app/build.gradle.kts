@@ -10,10 +10,16 @@ android {
         applicationId = "dev.flickime"
         minSdk = 26
         targetSdk = 35
-        versionCode = 33
-        versionName = "0.33"
+        versionCode = 34
+        versionName = "0.34"
+        ndk { abiFilters += listOf("arm64-v8a") }
+        externalNativeBuild { cmake { arguments += listOf("-DCMAKE_BUILD_TYPE=Release", "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON") } }
     }
-    androidResources { noCompress += listOf("bin") }
+    androidResources { noCompress += listOf("bin", "gguf") }
+    ndkVersion = "27.2.12479018"
+    externalNativeBuild {
+        cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" }
+    }
     buildTypes {
         release { isMinifyEnabled = false; signingConfig = signingConfigs.getByName("debug") }
     }

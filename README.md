@@ -5,7 +5,7 @@
 ## 主な機能
 
 - フリック入力（1キー1文字表示、フリック中に文字が引き出される表示）、英語QWERTY（なぞり入力、長押し記号）、半角数字
-- かな漢字変換：Mozc OSS辞書 + NEologd/新語の追加語彙、ラティスのN-bestを単語3-gram言語モデルで並べ替え
+- かな漢字変換：Mozc OSS辞書 + NEologd/新語の追加語彙、ラティスのN-bestを単語3-gram言語モデルで並べ替え、さらに入力の合間に zenz（ニューラル変換モデル、llama.cpp経由）で並べ替え
 - 学習：選んだ候補（英語・記号含む）を上位に、飛ばした1位を少し下に、確定した文の単語や単語の並びも学習。確定直後に⌫で消すと学習を取り消し
 - 確定ログ（端末内で暗号化、JSONLで書き出し）、ユーザー辞書のインポート（Gboard / Google日本語入力 / MS-IME / TSV）
 - 変換の区切り変更（◀▶）、候補の一覧表示、クリップボード履歴、絵文字パネル、フローティング、ガラス風テーマ
@@ -25,6 +25,9 @@
 | symbols.tsv / emoji_panel.tsv | `tools/build_symbols.py`, `tools/build_emoji.py` |
 | en_words.txt | `tools/build_words.py`（wordfreq） |
 | lm.bin | `tools/lm_corpus.py` → `tools/build_lm.py`（Wikipedia + Tatoeba、MeCab/IPAdicで分割） |
+| zenz.gguf | [Miwa-Keita/zenz-v3.1-small-gguf](https://huggingface.co/Miwa-Keita/zenz-v3.1-small-gguf) |
+
+ネイティブ部分（`app/src/main/cpp`、llama.cpp に zenz のトークナイザ名を1行追加したもの）は NDK 27 / CMake 3.22 でビルドされます。
 
 ## データのライセンス
 
@@ -33,4 +36,6 @@
 - JMdict: CC BY-SA 4.0（EDRDG）
 - wordfreq: CC BY-SA 4.0
 - 言語モデル: Wikipedia 日本語版（CC BY-SA 4.0）、Tatoeba（CC BY 2.0 FR）から作成
+- zenz-v3.1-small: CC BY-SA 4.0（三輪敬太）
+- llama.cpp: MIT
 - Unicode emoji data: Unicode License
