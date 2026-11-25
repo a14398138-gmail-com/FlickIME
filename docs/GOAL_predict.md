@@ -2,21 +2,32 @@
 
 あなたはこのリポジトリ（Android用の自作日本語フリックIME「FlickIME」）で、**予測変換**の精度を一晩かけて上げる。
 使うのは作者1人だけ（POCO F7 / Snapdragon 8s Gen 4）。配布やビルド周りは気にしなくてよい。
+**GitHub への push はできない環境を前提にする**（成果は最後にパッチファイルで渡す）。
+
+## 準備
+
+1. ソース: 作業ディレクトリに FlickIME が無ければ `git clone https://github.com/a14398138-gmail-com/FlickIME.git`（公開リポジトリなので認証不要）。
+2. 評価データ: 作者がアップロードした `flickime-eval.zip` をリポジトリ直下で展開する → `eval/events.tsv` ができる。
+   見つからなければ作業を始めずに、アップロードを頼むメッセージを出して止まる。
+   `eval/` は `.gitignore` 済み。**中身は作者個人の文章なので、コミットにもパッチにも出力にも含めない。**
+3. 作業開始時に `git rev-parse HEAD` を控える（BASE）。
 
 ## 評価方法（これが唯一の物差し）
 
-作者の実際の入力ログから作った評価データが `eval/events.tsv` にある（`.gitignore` 済み。**絶対にコミット・pushしない**。中身は個人の文章）。
+JDK だけで動く（Gradle / Android SDK 不要。初回は kotlinc を GitHub から自動ダウンロードする）:
 
 ```
-cd <repo>
-EVAL_DIR=$PWD/eval EVAL_SPLIT=dev EVAL_OUT=/tmp/dev.tsv ./gradlew -q testDebugUnitTest --tests '*PredictEvalTest*' --rerun -i | grep PREDEVAL
+tools/predeval/run.sh eval dev /tmp/dev.tsv
 ```
 
-- `EVAL_DIR` は絶対パスで渡す（テストは `app/` で動くため）。
+Android SDK が使える環境なら Gradle 経由でも同じ結果になる:
+`EVAL_DIR=$PWD/eval EVAL_SPLIT=dev EVAL_OUT=/tmp/dev.tsv ./gradlew -q testDebugUnitTest --tests '*PredictEvalTest*' --rerun -i | grep PREDEVAL`
+
 - ログを時系列に再生し、毎回「採点 → 学習」を繰り返す（実機での学習も込みで測る）。前60%は学習だけ（warm）、次の20%が **dev（調整に使う）**、最後の20%が **test（最後に1回だけ報告）**。
 - 主指標は **ksr**（keystroke saving rate）。シミュレーションされたユーザーが1文字ずつ打ち、残りの読みと表記の両方の先頭に一致する予測が候補バー（先頭5個）に出たら、それをタップして続きを打つ。最後は変換候補をタップする。全部打って1タップした場合と比べて、何%減ったかを測る。
 - 補助指標: `saved` / `hit` / `first1`（確定した文字列そのものが予測に出たか）、`conv1`（読みを全部打った時の第1候補が正解か＝**変換精度の回帰チェック**）。
-- `EVAL_OUT` の明細（target毎の `first=` `sim=` と変換結果）で、取りこぼしを見て仮説を立てること。
+- 明細ファイル（target毎の `first=` `sim=` と変換結果）で、取りこぼしを見て仮説を立てること。
+- 評価器のコード（`tools/predeval/PredEval.kt`、`tools/build_predict_eval.py`）は**変更しない**。
 
 ベースライン（v0.51）: **dev ksr 7.5% / saved 9.2% / hit 19.7% / conv1 78.7%**、test ksr 7.3%。
 
@@ -29,7 +40,8 @@ EVAL_DIR=$PWD/eval EVAL_SPLIT=dev EVAL_OUT=/tmp/dev.tsv ./gradlew -q testDebugUn
    - 予測を候補バーのどこに何個入れるか（今は単語2個の後に最大4個）
    - 1文字目・2文字目で出す件数や閾値（`UserHistory.completions` の重み、`dictPredictions` のコスト閾値）
 3. 変更ごとに dev を測り、`eval/NOTES.md` に「仮説 / 変更 / dev の ksr・saved・hit・conv1 / 採用か不採用か」を1行ずつ追記する（このファイルもコミットしない）。効かなかった変更は戻す。
-4. 採用した変更は、`./gradlew -q testDebugUnitTest assembleDebug` が通ることを確認してからコミットする（コミットメッセージは英語で短く。評価データの中身や作者の文章をコード・コメント・コミットに書かない）。
+4. 採用した変更はローカルでコミットする（コミットメッセージは英語で短く。評価データの中身や作者の文章をコード・コメント・コミットに書かない）。
+   Android SDK がある環境なら `./gradlew -q testDebugUnitTest` も通すこと。無い環境では `tools/predeval/run.sh` がコンパイルできることを最低ラインとし、Gradle のテストを回せなかったことを最後に明記する。
 
 ## 守ること
 
@@ -37,13 +49,15 @@ EVAL_DIR=$PWD/eval EVAL_SPLIT=dev EVAL_OUT=/tmp/dev.tsv ./gradlew -q testDebugUn
 - **dev/test の単語や文をハードコードしない**（辞書・リスト・テストへの追加も含む）。改善は一般的な仕組みで出すこと。データは約190件/splitと小さいので、1〜2件だけ直る変更より、効く理由を説明できる変更を優先する。
 - 回帰させない: `conv1` を dev で 1.0 ポイント以上下げない。既存のユニットテストを壊さない（壊れる場合は理由を書いて妥当な期待値に直す）。
 - 体感速度: 1文字目の予測は端末で ~100ms 以内に収まる設計にする（`PREDEVAL` の `time=` が大きく増えたら原因を調べる）。zenz（`zenz.gguf`）の推論を予測に毎キー回すような重い変更はしない。
-- `eval/` 配下・`*.apk`・ログファイルは絶対に push しない。push は `main` に通常の push のみ（force push 禁止）。
+- push しない（できない前提）。`eval/` 配下・ログの中身は、パッチにも最終出力にも含めない。
 - 外部から入れるデータは、ライセンスが明確なもの（Mozc OSS 辞書、NEologd など既に使っているもの）に限る。
 
 ## 終わり方
 
-最後に次を出力して終える:
+最後に `git format-patch BASE..HEAD --stdout > out/predict.patch` でパッチを作り（`out/` も含め、パッチに `eval/` のファイルが入っていないことを `grep '^diff --git' out/predict.patch` で確認）、
+その環境でファイルを渡す手段があれば `out/predict.patch` を作者に渡す。そのうえで次を出力して終える:
 
+0. `out/predict.patch` の場所と、`grep '^diff --git'` の結果（変更ファイル一覧）
 1. `eval/NOTES.md` の実験表（試したこと全部）
 2. 採用した変更の要約と、コミットハッシュ
 3. 最終の dev と test の `PREDEVAL` 行（そのまま貼る）

@@ -30,6 +30,8 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     testOptions { unitTests.isReturnDefaultValues = true }
+    // the prediction benchmark also runs standalone (tools/predeval/run.sh)
+    sourceSets["test"].java.srcDir("../tools/predeval")
 }
 
 dependencies {
