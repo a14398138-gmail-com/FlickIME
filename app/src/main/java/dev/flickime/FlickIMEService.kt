@@ -73,7 +73,8 @@ object Engine {
             fun table(name: String) = Kana.parseTable(c.assets.open(name).bufferedReader().readText())
             val conn = map("conn.bin").also { it.load() }
             val lm = runCatching { LanguageModel(map("lm.bin")) }.getOrNull()
-            Converter(Dictionary(map("dict.bin"), conn), table("en.tsv"), table("symbols.tsv"), lm = lm).also {
+            val predictIds = runCatching { c.assets.open("predict_ids.txt").bufferedReader().readText().trim().split(' ').map { it.toInt() }.toSet() }.getOrNull()
+            Converter(Dictionary(map("dict.bin"), conn), table("en.tsv"), table("symbols.tsv"), lm = lm, predictIds = predictIds).also {
                 it.history.load(HistoryStore.load(c))
                 it.userDict.load(UserDictStore.load(c))
                 converter = it
@@ -181,12 +182,14 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
                 }
                 if (consumedReading.length <= 10) h.learn(consumedReading, c.surface, undo = undo)
             }
+            // a prediction is learned under the word's own reading (ありが → ありがとう learns ありがとう)
+            c.kind == Candidate.Kind.PREDICTION && c.fullReading != null -> h.learn(c.fullReading, c.surface, undo = undo)
             // plain kana committed with ⏎: only short ones mean "I want hiragana here"
             rank < 0 && consumedReading.length > 6 -> Unit
             else -> h.learn(consumedReading, c.surface, undo = undo)
         }
         // (3) a deliberate pick below the top: the top one gets a small penalty
-        if (rank >= 1) {
+        if (rank >= 1 && c.kind != Candidate.Kind.PREDICTION) {
             val top = candidates.firstOrNull { it.consumed == c.consumed }
             if (top != null && top.surface != c.surface) h.penalize(consumedReading, top.surface, undo)
         }
@@ -1000,6 +1003,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
                     .put("full_reading", full)
                     .put("context_before", before)
                 c.segments?.let { segs -> ev.put("segments", org.json.JSONArray(segs.map { it.second })) }
+                c.fullReading?.let { ev.put("predicted_reading", it) }
                 io.execute { log.append(ev) }
             }
         }

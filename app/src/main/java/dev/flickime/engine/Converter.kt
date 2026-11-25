@@ -9,8 +9,10 @@ data class Candidate(
     val kind: Kind,
     /** For SENTENCE candidates: the (readingLength, surface) words it is made of. */
     val segments: List<Pair<Int, String>>? = null,
+    /** For PREDICTION candidates: the full reading of the predicted word (what gets learned). */
+    val fullReading: String? = null,
 ) {
-    enum class Kind { SENTENCE, WORD, ENGLISH, SYMBOL, KANA }
+    enum class Kind { SENTENCE, WORD, PREDICTION, ENGLISH, SYMBOL, KANA }
 }
 
 /**
@@ -26,6 +28,8 @@ class UserHistory {
     private val neg = HashMap<String, Int>()
     private val pairs = HashMap<String, Int>()
     private val readings = HashSet<String>()
+    /** reading -> surfaces with a positive weight, sorted by reading for prefix lookups */
+    private val byReading = java.util.TreeMap<String, MutableSet<String>>()
 
     @Volatile var version = 0
         private set
@@ -61,6 +65,7 @@ class UserHistory {
         if (!ok(reading, surface)) return
         val k = key(reading, surface)
         readings.add(reading)
+        byReading.getOrPut(reading) { LinkedHashSet() }.add(surface)
         set(pos, k, (pos[k] ?: 0) + weight, undo)
         // choosing it on purpose cancels an earlier "passed over"
         if (weight >= 2 && neg.containsKey(k)) set(neg, k, 0, undo)
@@ -85,7 +90,25 @@ class UserHistory {
         version++
     }
 
-    @Synchronized fun clear() { pos.clear(); neg.clear(); pairs.clear(); readings.clear(); version++ }
+    @Synchronized fun clear() { pos.clear(); neg.clear(); pairs.clear(); readings.clear(); byReading.clear(); version++ }
+
+    /**
+     * Things the user committed whose reading starts with [prefix] (and is longer):
+     * (reading, surface, score), most used first. Only deliberate picks count (weight >= 2).
+     */
+    @Synchronized fun completions(prefix: String, limit: Int): List<Triple<String, String, Int>> {
+        if (prefix.isEmpty()) return emptyList()
+        val out = ArrayList<Triple<String, String, Int>>()
+        for ((r, surfaces) in byReading.subMap(prefix, true, prefix + '\uffff', false)) {
+            if (r.length <= prefix.length) continue
+            for (sf in surfaces) {
+                if ((pos[key(r, sf)] ?: 0) < 2) continue
+                val sc = score(r, sf)
+                if (sc > 0) out.add(Triple(r, sf, sc))
+            }
+        }
+        return out.sortedByDescending { it.third }.take(limit)
+    }
 
     @Synchronized fun serialize(): String = buildString {
         append("#v2\n")
@@ -106,7 +129,7 @@ class UserHistory {
                 if (p.size != 4) continue
                 val v = p[3].toIntOrNull() ?: continue
                 when (p[0]) {
-                    "p" -> { pos[key(p[1], p[2])] = v; readings.add(p[1]) }
+                    "p" -> { pos[key(p[1], p[2])] = v; readings.add(p[1]); byReading.getOrPut(p[1]) { LinkedHashSet() }.add(p[2]) }
                     "n" -> { neg[key(p[1], p[2])] = v; readings.add(p[1]) }
                     "b" -> pairs["${p[1]}\t${p[2]}"] = v
                 }
@@ -115,7 +138,9 @@ class UserHistory {
             // v1: "reading surface count", one count per pick (= weight 2 now)
             for (line in lines) {
                 val p = line.split('\t')
-                if (p.size == 3) p[2].toIntOrNull()?.let { pos[key(p[0], p[1])] = it * 2; readings.add(p[0]) }
+                if (p.size == 3) p[2].toIntOrNull()?.let {
+                    pos[key(p[0], p[1])] = it * 2; readings.add(p[0]); byReading.getOrPut(p[0]) { LinkedHashSet() }.add(p[1])
+                }
             }
         }
         version++
@@ -129,6 +154,8 @@ class Converter(
     val history: UserHistory = UserHistory(),
     val userDict: UserDictionary = UserDictionary(),
     private val lm: LanguageModel? = null,
+    /** POS ids allowed as dictionary predictions (assets/predict_ids.txt); null = all. */
+    private val predictIds: Set<Int>? = null,
 ) {
     /** How much the language model counts against the dictionary costs when ranking sentences. */
     var lmWeight = DEFAULT_LM_WEIGHT
@@ -425,10 +452,17 @@ class Converter(
         // a couple of other whole-sentence readings when the reading spans several words
         if (path.size >= 2) ranked.drop(1).take(2).forEach { add(Candidate(it.surface, n, Candidate.Kind.SENTENCE, it.segments)) }
 
+        val preds = predictions(reading)
+        val own = preds.filter { history.count(it.fullReading!!, it.surface) > 0 || userDict.lookup(it.fullReading).any { w -> w.surface == it.surface } }
+        own.forEach { add(it) }
+        fun addDictPredictions() = preds.forEach { add(it) }
+        if (full.size < 2) addDictPredictions()
+
         val en = english[reading].orEmpty()
         val sym = symbols[reading].orEmpty()
         full.forEachIndexed { i, s ->
             add(Candidate(s, n, Candidate.Kind.WORD))
+            if (i == 1) addDictPredictions()
             if (i == 1) en.forEach { add(Candidate(it, n, Candidate.Kind.ENGLISH)) }
             if (i == 3) sym.take(6).forEach { add(Candidate(it, n, Candidate.Kind.SYMBOL)) }
         }
@@ -452,6 +486,32 @@ class Converter(
             if (idx == 0) symbols[r]?.take(8)?.forEach { add(Candidate(it, l, Candidate.Kind.SYMBOL)) }
         }
         return reorder(out.values.toList(), reading)
+    }
+
+    /**
+     * Completions of the reading typed so far (Gboard-style prediction):
+     * the user's own words / phrases and imported words from the first character,
+     * frequent dictionary words from the second.
+     */
+    fun predictions(reading: String, limit: Int = 4): List<Candidate> {
+        if (reading.isEmpty()) return emptyList()
+        val out = LinkedHashMap<String, Candidate>()
+        fun add(r: String, s: String) {
+            if (out.size < limit && s !in out) out[s] = Candidate(s, reading.length, Candidate.Kind.PREDICTION, fullReading = r)
+        }
+        history.completions(reading, limit).forEach { (r, s, _) -> add(r, s) }
+        userDict.completions(reading).take(limit).forEach { (r, s) -> add(r, s) }
+        if (reading.length >= 2) {
+            // short completions first: each extra character costs a bit
+            dict.completions(reading, maxExtra = 6, limit = 12, pos = { predictIds == null || it in predictIds })
+                // rare additions (web names, cost >= 6000) only if the language model has seen them;
+                // the user's own rare words come from their history instead
+                .map { (r, sf, cost) -> Triple(r, sf, if (lm == null || lm.knows(sf + '\u0001' + r)) cost else cost + 1500) }
+                .filter { it.third < 7500 }
+                .sortedBy { (r, _, cost) -> cost + 350 * (r.length - reading.length) }
+                .forEach { (r, s, _) -> if (!s.all { it in 'ぁ'..'ゖ' } || r.length - reading.length >= 2) add(r, s) }
+        }
+        return out.values.toList()
     }
 
     /** Reading length of the first segment the converter would pick on its own. */

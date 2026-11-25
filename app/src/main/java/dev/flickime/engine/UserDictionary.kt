@@ -19,6 +19,11 @@ class UserDictionary {
     /** A copy: the keyboard thread may add words while conversion runs on another thread. */
     @Synchronized fun lookup(reading: String): List<Word> = byReading[reading]?.toList().orEmpty()
     @Synchronized fun isEmpty() = byReading.isEmpty()
+
+    /** Imported words whose reading starts with [prefix] (and is longer). */
+    @Synchronized fun completions(prefix: String): List<Pair<String, String>> =
+        byReading.entries.filter { it.key.length > prefix.length && it.key.startsWith(prefix) }
+            .sortedBy { it.key.length }.flatMap { e -> e.value.map { e.key to it.surface } }
     @Synchronized fun clear() { byReading.clear(); version++ }
 
     @Synchronized fun remove(reading: String, surface: String): Boolean {

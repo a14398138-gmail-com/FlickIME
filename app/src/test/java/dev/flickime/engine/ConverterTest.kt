@@ -13,7 +13,9 @@ class ConverterTest {
         it.channel.map(FileChannel.MapMode.READ_ONLY, 0, it.length())
     }
     private val conv by lazy {
-        Converter(Dictionary(map("dict.bin"), map("conn.bin")), Kana.parseTable(File(assets, "en.tsv").readText()), Kana.parseTable(File(assets, "symbols.tsv").readText()))
+        Converter(Dictionary(map("dict.bin"), map("conn.bin")), Kana.parseTable(File(assets, "en.tsv").readText()), Kana.parseTable(File(assets, "symbols.tsv").readText()),
+            lm = LanguageModel(RandomAccessFile(File(assets, "lm.bin"), "r").use { it.channel.map(FileChannel.MapMode.READ_ONLY, 0, it.length()) }),
+            predictIds = File(assets, "predict_ids.txt").readText().trim().split(' ').map { it.toInt() }.toSet())
     }
 
     private fun top(r: String) = conv.candidates(r).first().surface
@@ -125,6 +127,16 @@ class ConverterTest {
         assertEquals(6, h.count("かんじ", "漢字"))
         val again = UserHistory().apply { load(h.serialize()) }
         assertEquals(6, again.count("かんじ", "漢字"))
+    }
+
+    @Test fun predictions() {
+        for (r in listOf("ありが", "よろし", "けんきゅ", "しゅうしろ", "あ")) println("PRED $r -> ${conv.predictions(r).map { "${it.surface}(${it.fullReading})" }}")
+        assertTrue(conv.predictions("ありが").any { it.fullReading!!.startsWith("ありがと") })
+        // own phrases complete from the first character, ahead of dictionary words
+        conv.history.learn("よろしくおねがいします", "よろしくお願いします")
+        assertEquals("よろしくお願いします", conv.predictions("よ").first().surface)
+        assertEquals(Candidate.Kind.PREDICTION, conv.candidates("よろ")[1].kind)
+        conv.history.clear()
     }
 
     @Test fun learning() {

@@ -64,6 +64,49 @@ class Dictionary(dictBuf: ByteBuffer, connBuf: ByteBuffer) {
         return -1
     }
 
+    private fun readingAt(idx: Int): String {
+        val off = d.getInt(readingOffBase + 4 * idx)
+        val end = d.getInt(readingOffBase + 4 * (idx + 1))
+        val ca = CharArray(end - off)
+        for (i in ca.indices) ca[i] = d.getChar(readingCharsBase + 2 * (off + i))
+        return String(ca)
+    }
+
+    /** First reading index >= key. */
+    private fun lowerBound(key: String): Int {
+        var lo = 0
+        var hi = nReadings
+        while (lo < hi) {
+            val mid = (lo + hi) ushr 1
+            if (compare(mid, key, 0, key.length) < 0) lo = mid + 1 else hi = mid
+        }
+        return lo
+    }
+
+    /**
+     * Words whose reading starts with [prefix] and is longer (prediction), cheapest first.
+     * Entries are cost-sorted per reading, so only each reading's first entry is looked at.
+     * Returns (reading, surface, cost) for entries whose POS id passes [pos]; scans at most [scan] readings.
+     */
+    fun completions(prefix: String, maxExtra: Int, limit: Int, pos: (Int) -> Boolean = { true }, scan: Int = 4000): List<Triple<String, String, Int>> {
+        val out = ArrayList<Triple<String, String, Int>>()
+        var idx = lowerBound(prefix)
+        var seen = 0
+        while (idx < nReadings && seen < scan) {
+            val r = readingAt(idx)
+            if (!r.startsWith(prefix)) break
+            seen++
+            if (r.length > prefix.length && r.length <= prefix.length + maxExtra) {
+                val s0 = d.getInt(entryStartBase + 4 * idx)
+                val s1 = d.getInt(entryStartBase + 4 * (idx + 1))
+                // cheapest entry of this reading whose part of speech is a whole word
+                for (e in s0 until s1) if (pos(lid(e))) { out.add(Triple(r, surface(e), cost(e))); break }
+            }
+            idx++
+        }
+        return out.sortedBy { it.third }.take(limit)
+    }
+
     /** All entries whose reading equals key[from, from+len). */
     fun lookup(key: CharSequence, from: Int, len: Int): List<Entry> {
         val idx = findReading(key, from, len)
