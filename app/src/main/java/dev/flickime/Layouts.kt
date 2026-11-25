@@ -15,6 +15,7 @@ sealed class Action {
     object Globe : Action()
     object Emoji : Action()
     object Settings : Action()
+    object Report : Action()   // ⚙ while converting: 👎 (no candidate is right) / ✓
 }
 
 /**

@@ -298,7 +298,6 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     private lateinit var clipButton: TextView
     private lateinit var floatButton: TextView
     private lateinit var snippetButton: TextView
-    private lateinit var badButton: TextView
 
     /**
      * 👎 while converting: no candidate is right. The keyboard then records what the user ends up writing in
@@ -334,7 +333,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     private fun finishBadReport(confirmed: Boolean) {
         val br = badReport ?: return
         badReport = null
-        if (::badButton.isInitialized) updateBarButtons()
+        updateBarButtons()
         if (privateField) return
         var answer: String? = null
         if (confirmed) {
@@ -437,11 +436,10 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         floatButton.visibility = if (idle) View.VISIBLE else View.GONE
         snippetButton.visibility = if (idle) View.VISIBLE else View.GONE
         // 👎 only while converting, and only with the log on (it is a report for later tuning)
-        if (::badButton.isInitialized) {
-            // 👎 while converting (log on); ✓ while a report is open, until the user confirms the right text
-            val reporting = badReport != null
-            badButton.text = if (reporting) "✓" else "👎"
-            badButton.visibility = if (reporting || !idle && reading.isNotEmpty() && candidates.isNotEmpty() && Prefs.loggingEnabled(this)) View.VISIBLE else View.GONE
+        if (::keyboard.isInitialized) {
+            // the ⚙ key: 👎 while converting (log on), ✓ while a report is open
+            keyboard.reportKey = Prefs.loggingEnabled(this)
+            keyboard.reporting = badReport != null
         }
         val recent = clips.firstOrNull()
         val showChip = idle && recent != null && System.currentTimeMillis() < recentClipShownUntil
@@ -742,13 +740,6 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
             visibility = View.INVISIBLE
             setOnClickListener { expand(!expanded) }
         }
-        badButton = TextView(this).apply {
-            text = "👎"; gravity = Gravity.CENTER
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
-            contentDescription = "正しい候補がない（記録）"; visibility = View.GONE
-            setOnClickListener { onBadButton() }
-        }
-        bar.addView(badButton, LinearLayout.LayoutParams((40 * dp).toInt(), LinearLayout.LayoutParams.MATCH_PARENT))
         bar.addView(expandButton, LinearLayout.LayoutParams((48 * dp).toInt(), LinearLayout.LayoutParams.MATCH_PARENT))
         root.addView(bar, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (barHeightDp() * dp).toInt()))
 
@@ -1054,6 +1045,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
                 if (reading.isNotEmpty()) { if (selected >= 0) commitCandidate(selected) else commitKana() }
                 showEmoji(true)
             }
+            Action.Report -> onBadButton()
             Action.Settings -> {
                 if (reading.isNotEmpty()) { if (selected >= 0) commitCandidate(selected) else commitKana() }
                 startActivity(android.content.Intent(this, SettingsActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))

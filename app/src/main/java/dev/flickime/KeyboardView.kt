@@ -43,8 +43,17 @@ class KeyboardView(context: Context, private val listener: Listener, private val
     var composing = false
         set(v) { if (field != v) { field = v; invalidate() } }
 
-    private fun effective(k: KeyDef): Action =
-        if (k.action == Action.Globe && composing && layout === Layouts.kana) Action.Dakuten else k.action
+    /** ⚙ is not needed while converting: it becomes 👎, and ✓ while a report is open. */
+    var reportKey = false
+        set(v) { if (field != v) { field = v; invalidate() } }
+    var reporting = false
+        set(v) { if (field != v) { field = v; invalidate() } }
+
+    private fun effective(k: KeyDef): Action = when {
+        k.action == Action.Globe && composing && layout === Layouts.kana -> Action.Dakuten
+        k.action == Action.Settings && (reporting || composing && reportKey) -> Action.Report
+        else -> k.action
+    }
 
     /** 0 = off, 1 = next letter only, 2 = caps lock */
     var shift = 0
@@ -115,6 +124,7 @@ class KeyboardView(context: Context, private val listener: Listener, private val
             val label = when {
                 showFlick -> k.flicks.getOrNull(dir) ?: ""
                 k.action == Action.Shift -> if (shift == 2) "⇪" else "⇧"
+                effective(k) == Action.Report -> if (reporting) "✓" else "👎"
                 effective(k) != k.action -> "゛゜"
                 else -> out(k, k.label)!!
             }
