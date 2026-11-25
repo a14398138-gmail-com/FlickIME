@@ -414,32 +414,9 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     private val zenzWorker = Executors.newSingleThreadExecutor()
     /** Text before the composition (zenz uses it as left context). */
     private var compositionContext = ""
-    private var zenzPending: Runnable? = null
 
     private fun captureContext() {
         compositionContext = currentInputConnection?.getTextBeforeCursor(40, 0)?.toString().orEmpty()
-    }
-
-    private fun scheduleZenz(r: String, my: Int) {
-        zenzPending?.let { main.removeCallbacks(it) }
-        if (!Prefs.zenzEnabled(this) || r.length < 2 || segLen > 0) return
-        val ctx = if (privateField) "" else compositionContext
-        val job = Runnable {
-            zenzWorker.execute {
-                if (my != seq) return@execute
-                val conv = Engine.converter ?: return@execute
-                if (conv.zenz == null || conv.zenzRanked(r)) return@execute
-                if (!conv.zenzRerank(r, ctx)) return@execute
-                worker.execute {
-                    if (my != seq) return@execute
-                    val cands = runCatching { conv.candidates(r) }.getOrNull() ?: return@execute
-                    // only while the user hasn't started picking: no jumping under their finger
-                    main.post { if (my == seq && selected < 0 && !expanded && reading.toString() == r) { candidates = cands; renderCandidates() } }
-                }
-            }
-        }
-        zenzPending = job
-        main.postDelayed(job, 120)
     }
 
     override fun onCreate() {
@@ -960,14 +937,21 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         worker.execute {
             if (my != seq) return@execute // a newer keystroke is already queued
             val sl = segLen
+            val ctx = if (privateField) "" else compositionContext
             val cands = runCatching {
                 val conv = Engine.get(applicationContext)
+                // zenz ranks the sentences before anything is shown (no n-gram first, no swap later)
+                if (sl == 0 && r.length >= 2 && conv.zenz != null && Prefs.zenzEnabled(this) && !conv.zenzRanked(r)) {
+                    if (my != seq) return@execute
+                    conv.zenzRerank(r, ctx)
+                    if (my != seq) return@execute
+                }
                 if (sl in 1..r.length) conv.segmentCandidates(r, sl) else conv.candidates(r)
             }.getOrElse {
                 listOf(Candidate(r, r.length, Candidate.Kind.KANA), Candidate(Kana.toKatakana(r), r.length, Candidate.Kind.KANA))
             }
             main.post {
-                if (my == seq) { candidates = cands; renderCandidates(); scheduleZenz(r, my) }
+                if (my == seq) { candidates = cands; renderCandidates() }
             }
         }
     }
