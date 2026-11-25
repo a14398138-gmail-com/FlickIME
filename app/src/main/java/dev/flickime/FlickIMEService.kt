@@ -298,6 +298,35 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     private lateinit var clipButton: TextView
     private lateinit var floatButton: TextView
     private lateinit var snippetButton: TextView
+    private lateinit var badButton: TextView
+
+    /** The last commit, for 👎 (flag it as a bad conversion in the log and forget what it taught). */
+    private class Feedback(val ts: Long, val reading: String, val full: String, val surface: String, val top: String?,
+                           val before: String, val engine: String, val undo: UserHistory.Undo)
+    private var lastFeedback: Feedback? = null
+
+    private fun flagBad() {
+        val fb = lastFeedback
+        if (fb == null) { android.widget.Toast.makeText(this, "直前の変換がありません", android.widget.Toast.LENGTH_SHORT).show(); return }
+        lastFeedback = null
+        Engine.converter?.history?.revert(fb.undo); historyDirty = true
+        if (Prefs.loggingEnabled(this)) {
+            val ev = JSONObject()
+                .put("type", "bad")
+                .put("ts", System.currentTimeMillis())
+                .put("ref", fb.ts)
+                .put("version", BuildConfig.VERSION_NAME)
+                .put("engine", fb.engine)
+                .put("reading", fb.reading)
+                .put("full_reading", fb.full)
+                .put("committed", fb.surface)
+                .put("top", fb.top ?: JSONObject.NULL)
+                .put("context_before", fb.before)
+                .put("app", currentInputEditorInfo?.packageName ?: "")
+            io.execute { log.append(ev) }
+            android.widget.Toast.makeText(this, "「${fb.surface.take(20)}」を変換ミスとして記録しました", android.widget.Toast.LENGTH_SHORT).show()
+        } else android.widget.Toast.makeText(this, "学習は取り消しました（ログがオフなので記録はしていません）", android.widget.Toast.LENGTH_SHORT).show()
+    }
     private lateinit var snippetPanel: ScrollView
     private lateinit var snippetList: LinearLayout
     private var snippetOpen = false
@@ -364,6 +393,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         clipButton.visibility = if (idle) View.VISIBLE else View.GONE
         floatButton.visibility = if (idle) View.VISIBLE else View.GONE
         snippetButton.visibility = if (idle) View.VISIBLE else View.GONE
+        badButton.visibility = if (idle) View.VISIBLE else View.GONE
         val recent = clips.firstOrNull()
         val showChip = idle && recent != null && System.currentTimeMillis() < recentClipShownUntil
         clipChip.visibility = if (showChip) View.VISIBLE else View.GONE
@@ -643,6 +673,13 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
             }
         }
         bar.addView(snippetButton, LinearLayout.LayoutParams((44 * dp).toInt(), LinearLayout.LayoutParams.MATCH_PARENT))
+        badButton = TextView(this).apply {
+            text = "👎"; gravity = Gravity.CENTER
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+            contentDescription = "直前の変換をミスとして記録"
+            setOnClickListener { flagBad() }
+        }
+        bar.addView(badButton, LinearLayout.LayoutParams((44 * dp).toInt(), LinearLayout.LayoutParams.MATCH_PARENT))
         clipChip = TextView(this).apply {
             gravity = Gravity.CENTER_VERTICAL; isSingleLine = true
             ellipsize = android.text.TextUtils.TruncateAt.END
@@ -772,6 +809,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         super.onStartInputView(info, restarting)
         // rebuild the view when the theme was switched in settings
         if (::theme.isInitialized && themeKey != Prefs.themeKey(this)) setInputView(onCreateInputView())
+        if (!restarting) lastFeedback = null
         typedWord.setLength(0); typedWordValid = false
         resetComposition()
         if (::clipPanel.isInitialized && clipOpen) showClips(false)
@@ -1185,6 +1223,8 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         if (!privateField) {
             val undo = learnFrom(c, consumedReading, rank)
             lastCommit = LastCommit(ts, c.surface, undo, null)
+            lastFeedback = Feedback(ts, consumedReading, full, c.surface, candidates.firstOrNull { it.consumed == c.consumed }?.surface,
+                before, if (rank < 0) "none" else candidatesEngine, undo)
             if (Prefs.loggingEnabled(this)) {
                 val top = candidates.firstOrNull { it.consumed == c.consumed }?.surface
                 val ev = JSONObject()

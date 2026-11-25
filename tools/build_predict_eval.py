@@ -5,7 +5,7 @@ usage: build_predict_eval.py LOG.jsonl OUT_DIR
 
 Writes OUT_DIR/events.jsonl: every usable commit in time order, one per line:
   {"i", "ts", "split": "warm"|"dev"|"test", "context", "reading", "surface", "kind", "target": bool}
-- commits deleted right afterwards (a correction removing >= half of it) are dropped:
+- commits flagged with 👎 and commits deleted right afterwards (a correction removing >= half of it) are dropped:
   they were wrong, so they are neither learned nor scored
 - "target": scored for prediction (2..12 reading chars, surface is not just the kana / a symbol)
 - split by time: first 60% "warm" (only learned), next 20% "dev" (tune on this), last 20% "test" (report only)
@@ -20,6 +20,8 @@ commits = sorted((r for r in rows if r.get('type', 'commit') == 'commit'), key=l
 wrong = set()
 for r in rows:
     if r.get('type') == 'correction' and len(r.get('deleted', '')) * 2 >= len(r.get('committed', '')) > 0:
+        wrong.add(r['ref'])
+    if r.get('type') == 'bad':  # flagged with 👎 on the keyboard
         wrong.add(r['ref'])
 
 KANA = re.compile(r'^[ぁ-ゖーァ-ヺ]+$')
