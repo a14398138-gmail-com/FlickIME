@@ -3,3 +3,6 @@ build/
 local.properties
 .cxx/
 app/.cxx/
+
+# personal evaluation data (built from the commit log; never commit)
+eval/
