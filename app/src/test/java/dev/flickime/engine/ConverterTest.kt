@@ -139,6 +139,19 @@ class ConverterTest {
         conv.history.clear()
     }
 
+    @Test fun zipImportIsBoundedAndPicksDictionary() {
+        fun zip(vararg entries: Pair<String, ByteArray>): ByteArray {
+            val bo = java.io.ByteArrayOutputStream()
+            java.util.zip.ZipOutputStream(bo).use { z -> entries.forEach { (n, b) -> z.putNextEntry(java.util.zip.ZipEntry(n)); z.write(b); z.closeEntry() } }
+            return bo.toByteArray()
+        }
+        val picked = UserDictionary.unzipIfNeeded(zip("readme.txt" to "x".toByteArray(), "dictionary.txt" to "ふりっく\tFlick\tja-JP".toByteArray()))
+        assertEquals("ふりっく\tFlick\tja-JP", String(picked))
+        val bomb = zip("dictionary.txt" to ByteArray(UserDictionary.MAX_TEXT_BYTES + 1))   // compresses to ~32 KB
+        assertTrue(bomb.size < 1_000_000)
+        assertTrue(runCatching { UserDictionary.unzipIfNeeded(bomb) }.exceptionOrNull() is dev.flickime.engine.DictionaryTooLargeException)
+    }
+
     @Test fun learning() {
         val before = conv.candidates("かんじ").map { it.surface }
         val target = before.first { it != before[0] && it != "かんじ" }

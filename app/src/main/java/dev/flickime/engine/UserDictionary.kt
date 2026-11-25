@@ -84,17 +84,39 @@ class UserDictionary {
             return runCatching { String(bytes, Charset.forName("Shift_JIS")) }.getOrDefault(utf8)
         }
 
-        /** Unwraps a Gboard export (zip containing dictionary.txt); other files are returned unchanged. */
+        /** Largest dictionary text accepted after unzipping (a real word list is a few MB at most). */
+        const val MAX_TEXT_BYTES = 32 * 1024 * 1024
+
+        /** Reads at most [max] bytes; throws instead of growing without bound (zip bombs). */
+        fun readLimited(input: java.io.InputStream, max: Int): ByteArray {
+            val out = java.io.ByteArrayOutputStream()
+            val buf = ByteArray(64 * 1024)
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                if (out.size() + n > max) throw DictionaryTooLargeException()
+                out.write(buf, 0, n)
+            }
+            return out.toByteArray()
+        }
+
+        /**
+         * Unwraps a Gboard export (a zip with dictionary.txt). Prefers an entry named
+         * dictionary.txt, else the first .txt. Other files are returned unchanged.
+         */
         fun unzipIfNeeded(bytes: ByteArray): ByteArray {
             if (bytes.size < 4 || bytes[0] != 'P'.code.toByte() || bytes[1] != 'K'.code.toByte()) return bytes
+            var firstTxt: ByteArray? = null
             ZipInputStream(ByteArrayInputStream(bytes)).use { z ->
                 var e = z.nextEntry
                 while (e != null) {
-                    if (!e.isDirectory && e.name.endsWith(".txt")) return z.readBytes()
+                    val name = e.name.substringAfterLast('/').lowercase()
+                    if (!e.isDirectory && name == "dictionary.txt") return readLimited(z, MAX_TEXT_BYTES)
+                    if (!e.isDirectory && name.endsWith(".txt") && firstTxt == null) firstTxt = readLimited(z, MAX_TEXT_BYTES)
                     e = z.nextEntry
                 }
             }
-            return bytes
+            return firstTxt ?: ByteArray(0)
         }
 
         /**
@@ -120,3 +142,5 @@ class UserDictionary {
         }
     }
 }
+
+class DictionaryTooLargeException : java.io.IOException("dictionary too large")

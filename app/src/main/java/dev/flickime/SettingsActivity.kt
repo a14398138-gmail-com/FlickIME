@@ -184,7 +184,7 @@ class SettingsActivity : Activity() {
     private fun importDictionary(uri: android.net.Uri) {
         Thread {
             val result = runCatching {
-                val bytes = contentResolver.openInputStream(uri)!!.use { it.readBytes() }
+                val bytes = contentResolver.openInputStream(uri)!!.use { UserDictionary.readLimited(it, 64 * 1024 * 1024) }
                 val words = UserDictionary.parse(UserDictionary.decode(UserDictionary.unzipIfNeeded(bytes)))
                 val dict = userDict()
                 var added = 0
@@ -195,7 +195,7 @@ class SettingsActivity : Activity() {
             runOnUiThread {
                 result.onSuccess { (read, added) ->
                     toast(if (read == 0) "単語が見つかりませんでした" else "$read 語を読み込み、$added 語を追加しました")
-                }.onFailure { toast("読み込みに失敗しました") }
+                }.onFailure { e -> toast(if (e is dev.flickime.engine.DictionaryTooLargeException) "ファイルが大きすぎます" else "読み込みに失敗しました") }
                 refresh()
             }
         }.start()
@@ -213,7 +213,7 @@ class SettingsActivity : Activity() {
         val uri = data?.data
         if (requestCode == REQ_IMAGE && resultCode == RESULT_OK && uri != null) {
             Thread {
-                val ok = runCatching { BackgroundImage.save(this, contentResolver.openInputStream(uri)!!.use { it.readBytes() }) }.getOrDefault(false)
+                val ok = runCatching { BackgroundImage.save(this, contentResolver.openInputStream(uri)!!.use { UserDictionary.readLimited(it, 50 * 1024 * 1024) }) }.getOrDefault(false)
                 runOnUiThread {
                     if (ok) { Prefs.setGlassTheme(this, true); toast("背景画像を設定しました"); recreate() }
                     else toast("画像を読み込めませんでした")
