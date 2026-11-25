@@ -109,6 +109,8 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     private var themeKey = ""
     private val barViews = ArrayList<TextView>()
     private var lastRendered: List<Candidate>? = null
+    /** Which ranking produced the shown candidates (logged with each commit). */
+    private var candidatesEngine = "ngram"
     private var privateField = false
     private var historyDirty = false
 
@@ -954,6 +956,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         val useZenz = Prefs.zenzEnabled(this)
         worker.execute {
             if (my != seq) return@execute // a newer keystroke is already queued
+            var engine = "ngram"
             val cands = runCatching {
                 val conv = Engine.get(applicationContext)
                 // zenz ranks the sentences before anything is shown (no n-gram first, no swap later)
@@ -962,12 +965,14 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
                     conv.zenzRerank(r, ctx)
                     if (my != seq) return@execute
                 }
+                if (sl == 0 && conv.zenzRanked(r, ctx)) engine = "zenz"
                 if (sl in 1..r.length) conv.segmentCandidates(r, sl) else conv.candidates(r, ctx)
             }.getOrElse {
+                engine = "fallback"
                 listOf(Candidate(r, r.length, Candidate.Kind.KANA), Candidate(Kana.toKatakana(r), r.length, Candidate.Kind.KANA))
             }
             main.post {
-                if (my == seq) { candidates = cands; renderCandidates() }
+                if (my == seq) { candidates = cands; candidatesEngine = engine; renderCandidates() }
             }
         }
     }
@@ -1001,6 +1006,9 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
                 val ev = JSONObject()
                     .put("type", "commit")
                     .put("ts", ts)
+                    .put("version", BuildConfig.VERSION_NAME)
+                    // which ranking produced the list this was picked from: zenz / ngram (3-gram only) / fallback
+                    .put("engine", if (rank < 0) "none" else candidatesEngine)
                     .put("app", currentInputEditorInfo?.packageName ?: "")
                     .put("reading", consumedReading)
                     .put("surface", c.surface)
