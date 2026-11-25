@@ -174,6 +174,33 @@ Java_dev_flickime_engine_Zenz_nativeScore(JNIEnv *env, jclass, jlong handle, jby
     return res;
 }
 
+/** Greedy generation of the output for [prompt]; UTF-8 bytes, empty on failure. */
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_dev_flickime_engine_Zenz_nativeGenerate(JNIEnv *env, jclass, jlong handle, jbyteArray jprompt, jint maxTokens) {
+    auto *z = reinterpret_cast<Zenz *>(handle);
+    std::string text;
+    if (z) {
+        auto prompt = tokenize(*z, bytes(env, jprompt));
+        llama_memory_clear(llama_get_memory(z->ctx), true);
+        int pos = (int) prompt.size();
+        if (pos < 400 && decode(*z, prompt, 0, false)) {
+            for (int step = 0; step < maxTokens && pos < 1000; step++) {
+                const float *l = llama_get_logits_ith(z->ctx, -1);
+                llama_token best = 0;
+                for (int i = 1; i < z->n_vocab; i++) if (l[i] > l[best]) best = i;
+                if (best == END || llama_vocab_is_eog(z->vocab, best)) break;
+                char buf[64];
+                int n = llama_token_to_piece(z->vocab, best, buf, sizeof buf, 0, false);
+                if (n > 0) text.append(buf, (size_t) n);
+                if (!decode(*z, {best}, pos++, false)) break;
+            }
+        }
+    }
+    jbyteArray res = env->NewByteArray((jsize) text.size());
+    env->SetByteArrayRegion(res, 0, (jsize) text.size(), reinterpret_cast<const jbyte *>(text.data()));
+    return res;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_dev_flickime_engine_Zenz_nativeFree(JNIEnv *, jclass, jlong handle) {
     auto *z = reinterpret_cast<Zenz *>(handle);

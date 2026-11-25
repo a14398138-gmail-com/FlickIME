@@ -377,6 +377,10 @@ class Converter(
 
     /** Neural re-ranker (optional). */
     @Volatile var zenz: Zenz? = null
+    /** Add zenz's greedy generation to the candidates it scores (tuning knobs). */
+    var zenzGenerate = false
+    var zenzGenPenalty = 0
+
     /** Weight of the n-gram score (per 1000) against zenz's log-likelihood (nats). */
     var zenzWeight = 0.3f
     private val zenzCache = object : LinkedHashMap<String, List<Sentence>>(32, 0.75f, true) {
@@ -411,8 +415,12 @@ class Converter(
         val base = synchronized(this) { checkVersion(); ngramSentences(reading) }
         if (base.size < 2) return false
         val version = cacheVersion
-        val nll = z.score(reading, context, base.map { it.surface }) ?: return false
-        val ranked = base.indices.sortedBy { base[it].score * zenzWeight / 1000f + nll[it] }.map { base[it] }
+        // optionally zenz's own greedy output joins the candidates (it can be outside the N-best);
+        // it has no n-gram score, so it gets the worst one plus a penalty
+        val gen = if (zenzGenerate) z.generate(reading, context)?.takeIf { g -> base.none { it.surface == g } } else null
+        val all = if (gen != null) base + Sentence(listOf(reading.length to gen), base.last().score + zenzGenPenalty) else base
+        val nll = z.score(reading, context, all.map { it.surface }) ?: return false
+        val ranked = all.indices.sortedBy { all[it].score * zenzWeight / 1000f + nll[it] }.map { all[it] }
         synchronized(this) {
             if (version != cacheVersion) return false
             zenzCache[zkey(reading, context)] = ranked

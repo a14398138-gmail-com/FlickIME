@@ -12,12 +12,20 @@ class Zenz private constructor(private var handle: Long) {
         return if (r.any { it.isNaN() }) null else r
     }
 
+    /** zenz's own greedy conversion of [reading] (can fall outside the dictionary's N-best). */
+    @Synchronized fun generate(reading: String, context: String): String? {
+        if (handle == 0L) return null
+        val b = nativeGenerate(handle, prompt(reading, context).toByteArray(), reading.length * 2 + 8)
+        return String(b, Charsets.UTF_8).replace('　', ' ').ifEmpty { null }
+    }
+
     @Synchronized fun close() { if (handle != 0L) nativeFree(handle); handle = 0 }
 
     companion object {
         @JvmStatic external fun nativeLoad(path: String, threads: Int): Long
         @JvmStatic external fun nativeScore(handle: Long, prompt: ByteArray, candidates: Array<ByteArray>): FloatArray
         @JvmStatic external fun nativeFree(handle: Long)
+        @JvmStatic external fun nativeGenerate(handle: Long, prompt: ByteArray, maxTokens: Int): ByteArray
 
         fun load(path: String, threads: Int): Zenz? = nativeLoad(path, threads).takeIf { it != 0L }?.let { Zenz(it) }
 

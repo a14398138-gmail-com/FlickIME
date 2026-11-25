@@ -31,7 +31,10 @@ class AjimeeTest {
             System.load(lib)
             if (System.getenv("ZENZ_V2") == "1") Zenz.v2Prompt = true
             conv.zenz = Zenz.load(model, 2)
+            conv.zenzGenerate = System.getenv("ZENZ_GEN") == "1"
+            System.getenv("ZENZ_GENPEN")?.let { conv.zenzGenPenalty = it.toInt() }
         }
+        var genOk = 0
         fun unesc(s: String) = s.replace("\\n", "\n").replace("\\t", "\t")
         // [with context, without] x [n, acc, cerSum]
         val n = IntArray(2); val acc = IntArray(2); val cer = DoubleArray(2); var oracle = 0; var oracle4 = 0; val top4 = IntArray(2)
@@ -50,6 +53,7 @@ class AjimeeTest {
             ms += (System.nanoTime() - t0) / 1_000_000
             n[k]++
             if (conv.sentences(reading, ctx).any { it.surface in answers }) oracle++
+            if (conv.zenzGenerate && conv.zenz!!.generate(reading, ctx) in answers) genOk++
             if (conv.zenz == null && conv.sentences(reading, ctx).take(4).any { it.surface in answers }) oracle4++
             if (got in answers) acc[k]++ else misses.append("${p[0]}\t$got\t${answers.first()}\n")
             cer[k] += answers.minOf { lev(it, got).toDouble() / it.length }
@@ -60,6 +64,6 @@ class AjimeeTest {
         println("AJIMEE acc@1=${pct(acc.sum(), tot)} (ctx ${pct(acc[0], n[0])}, no-ctx ${pct(acc[1], n[1])}) " +
             "bar-top4=${pct(top4.sum(), tot)} (ctx ${pct(top4[0], n[0])}, no-ctx ${pct(top4[1], n[1])}) " +
             "MinCER=${"%.3f".format(cer.sum() / tot)} (ctx ${"%.3f".format(cer[0] / n[0])}, no-ctx ${"%.3f".format(cer[1] / n[1])}) " +
-            "N-best oracle=${pct(oracle, tot)} oracle@4=${pct(oracle4, tot)} ${ms / tot} ms/item n=$tot zenz=${conv.zenz != null}${if (useCtx) "" else " (context withheld)"}")
+            "N-best oracle=${pct(oracle, tot)} ${if (conv.zenzGenerate) "gen-only=${pct(genOk, tot)} genpen=${conv.zenzGenPenalty} " else ""}oracle@4=${pct(oracle4, tot)} ${ms / tot} ms/item n=$tot zenz=${conv.zenz != null}${if (useCtx) "" else " (context withheld)"}")
     }
 }
