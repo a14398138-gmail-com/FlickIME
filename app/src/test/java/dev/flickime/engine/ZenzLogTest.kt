@@ -12,6 +12,7 @@ class ZenzLogTest {
         val f = ConverterTest::class.java.getDeclaredMethod("getConv").apply { isAccessible = true }
         val conv = f.invoke(ConverterTest()) as Converter
         conv.zenz = Zenz.load(model!!, 2)
+        conv.zenzGenerate = System.getenv("ZENZ_GEN") == "1"
         fun unesc(s: String) = s.replace("\\n", "\n").replace("\\t", "\t")
         var n = 0; var ok = 0; var okNoCtx = 0; var base = 0
         for (line in File(dir, "events.tsv").readLines()) {
