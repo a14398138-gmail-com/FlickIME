@@ -194,7 +194,7 @@ class SettingsActivity : Activity() {
         col.addView(button("ログを書き出す（JSONL・復号済み）") {
             val name = "flickime-log-" + SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date()) + ".jsonl"
             startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                addCategory(Intent.CATEGORY_OPENABLE); type = "application/json"; putExtra(Intent.EXTRA_TITLE, name)
+                addCategory(Intent.CATEGORY_OPENABLE); type = "application/octet-stream" /* any other type makes the picker append its own extension (.jsonl.json) */; putExtra(Intent.EXTRA_TITLE, name)
             }, REQ_EXPORT)
         })
         col.addView(button("ログを削除") {
