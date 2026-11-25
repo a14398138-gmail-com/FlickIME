@@ -15,8 +15,8 @@ class EvalTest {
 
     private fun converter(withLm: Boolean) = Converter(
         Dictionary(map(File(assets, "dict.bin")), map(File(assets, "conn.bin"))), emptyMap(), emptyMap(),
-        lm = if (withLm) LanguageModel(map(File(assets, "lm.bin"))) else null,
-    )
+        lm = if (withLm) LanguageModel(map(File(assets, "lm.bin"))).also { lm -> System.getenv("UNK_SCALE")?.let { lm.unkScale = it.toFloat() } } else null,
+    ).also { c -> System.getenv("UNK_NODE")?.let { c.unkNodeCost = it.toInt() } }
 
     private fun editDistance(a: String, b: String): Int {
         val dp = IntArray(b.length + 1) { it }

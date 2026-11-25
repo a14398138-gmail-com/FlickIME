@@ -29,7 +29,7 @@ Android SDK が使える環境なら Gradle 経由でも同じ結果になる:
 - 明細ファイル（target毎の `first=` `sim=` と変換結果）で、取りこぼしを見て仮説を立てること。
 - 評価器のコード（`tools/predeval/PredEval.kt`、`tools/build_predict_eval.py`）は**変更しない**。
 
-ベースライン（v0.51）: **dev ksr 7.5% / saved 9.2% / hit 19.7% / conv1 78.7%**、test ksr 7.3%。
+ベースライン（v0.54、評価器は v0.54 で実機と同じ学習（文中の単語も weight 1 で学習）に変更済み）: **dev ksr 7.1% / saved 10.5% / hit 32.4% / conv1 81.9%**、test ksr 8.5% / conv1 82.1%。
 
 ## やること
 

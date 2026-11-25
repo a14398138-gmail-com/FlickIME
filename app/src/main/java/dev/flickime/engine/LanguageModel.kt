@@ -16,6 +16,8 @@ class LanguageModel(buf: ByteBuffer) {
     private val nBi: Int
     private val step: Float
     val unkCost: Int
+    /** Scale on the unknown-word cost (tuning knob). */
+    var unkScale = 1f
     private val uniKeys: Int
     private val uniP: Int
     private val uniB: Int
@@ -85,7 +87,7 @@ class LanguageModel(buf: ByteBuffer) {
         val pi = find(uniKeys, nUni, fold(hp))
         val backoff = if (pi >= 0) deq(b.get(uniB + pi)) else 0
         val wi = find(uniKeys, nUni, fold(hw))
-        if (wi < 0) return backoff + unkCost
+        if (wi < 0) return backoff + (unkCost * unkScale).toInt()
         if (pi >= 0) {
             val bi = find(biKeys, nBi, mix(hp, hw))
             if (bi >= 0) return deq(b.get(biP + bi))

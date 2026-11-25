@@ -170,6 +170,9 @@ class Converter(
     /** POS ids allowed as dictionary predictions (assets/predict_ids.txt); null = all. */
     private val predictIds: Set<Int>? = null,
 ) {
+    /** Cost of a bare one-kana node that keeps the lattice connected (tuning knob). */
+    var unkNodeCost = 12000
+
     /** reading -> single kanji in Mozc's frequency order (assets/single_kanji.tsv), shown after the words. */
     @Volatile var singleKanji: Map<String, String> = emptyMap()
 
@@ -214,6 +217,20 @@ class Converter(
     }
 
     private fun boost(reading: String, surface: String) = history.score(reading, surface)
+
+    /**
+     * Cost of a dictionary entry the user has picked before (sc > 0) or passed over (sc < 0).
+     * A picked word first becomes the cheapest of its reading, then gets a bonus that is small for
+     * one- and two-kana readings: a flat bonus of up to 5400 on particles and single kana the user
+     * types all the time made the lattice chop sentences into them (き|い|た…).
+     */
+    private fun learnedCost(len: Int, cost: Int, minCost: Int, sc: Int): Int {
+        if (sc <= 0) return cost - sc
+        val cap = when (len) { 1 -> boostCap1; 2 -> boostCap2; else -> Int.MAX_VALUE }
+        return minOf(cost, minCost) - minOf(sc, cap)
+    }
+    var boostCap1 = 150
+    var boostCap2 = 500
     private fun boosted(w: UserDictionary.Word): Int = USER_COST - boost(w.reading, w.surface)
 
     private fun punctuation(c: Char): Pair<Int, Int>? = when (c) {
@@ -264,12 +281,13 @@ class Converter(
                 for (w in user) place(Node(i, i + len, -1, w.surface, w.posId, w.posId, boosted(w)))
                 if (range != null) {
                     val learned = r != null && history.has(r)
+                    val minCost = if (learned) range.minOf { dict.cost(it) } else 0
                     for (e in range) {
-                        val cost = if (learned) dict.cost(e) - boost(r!!, dict.surface(e)) else dict.cost(e)
+                        val cost = if (learned) learnedCost(len, dict.cost(e), minCost, boost(r!!, dict.surface(e))) else dict.cost(e)
                         place(Node(i, i + len, e, null, dict.lid(e), dict.rid(e), cost))
                     }
                 }
-                if (len == 1) place(Node(i, i + 1, -1, r, UNK_ID, UNK_ID, 12000)) // keeps the lattice connected
+                if (len == 1) place(Node(i, i + 1, -1, r, UNK_ID, UNK_ID, unkNodeCost)) // keeps the lattice connected
             }
         }
         return Lattice(n, ends, bos)
@@ -367,7 +385,7 @@ class Converter(
 
     private fun checkVersion() {
         val v = history.version.toLong() * 1_000_003L + userDict.version
-        if (v != cacheVersion) { cache.clear(); zenzCache.clear(); cacheVersion = v }
+        if (v != cacheVersion) { cache.clear(); zenzCache.clear(); synchronized(phraseCache) { phraseCache.clear() }; cacheVersion = v }
     }
 
     /** zenz results depend on the text before the composition, so it is part of the key. */
@@ -472,14 +490,17 @@ class Converter(
         val path = ranked.first().segments
         val full = words(reading, limit)
         add(Candidate(ranked.first().surface, n, Candidate.Kind.SENTENCE, path))
-        // a couple of other whole-sentence readings when the reading spans several words
-        if (path.size >= 2) ranked.drop(1).take(2).forEach { add(Candidate(it.surface, n, Candidate.Kind.SENTENCE, it.segments)) }
+        val preds = predictions(reading, context)
+        // other whole-sentence readings when the reading spans several words
+        fun addAltSentences() { if (path.size >= 2) ranked.drop(1).take(2).forEach { add(Candidate(it.surface, n, Candidate.Kind.SENTENCE, it.segments)) } }
+        if (!predictionsFirst) addAltSentences()
 
-        val preds = predictions(reading)
         val own = preds.filter { history.count(it.fullReading!!, it.surface) > 0 || userDict.lookup(it.fullReading).any { w -> w.surface == it.surface } }
         own.forEach { add(it) }
         fun addDictPredictions() = preds.forEach { add(it) }
-        if (full.size < 2) addDictPredictions()
+        // while typing several words, predictions matter more than other ways to split what is typed
+        if (full.size < 2 || predictionsFirst && path.size >= 2) addDictPredictions()
+        if (predictionsFirst) addAltSentences()
 
         val en = english[reading].orEmpty()
         val sym = symbols[reading].orEmpty()
@@ -517,7 +538,7 @@ class Converter(
      * the user's own words / phrases and imported words from the first character,
      * frequent dictionary words from the second.
      */
-    fun predictions(reading: String, limit: Int = 4): List<Candidate> {
+    fun predictions(reading: String, context: String = "", limit: Int = 4): List<Candidate> {
         if (reading.isEmpty()) return emptyList()
         val out = LinkedHashMap<String, Candidate>()
         fun add(r: String, s: String) {
@@ -525,8 +546,62 @@ class Converter(
         }
         history.completions(reading, limit).forEach { (r, s, _) -> add(r, s) }
         userDict.completions(reading).take(limit).forEach { (r, s) -> add(r, s) }
+        if (reading.length >= 2) {
+            val best = sentences(reading, context).firstOrNull()
+            // the converted text so far + a likely particle / auxiliary (聞いた → 聞いたけど), ranked by the LM
+            if (phrasePredictions && best != null && best.segments.isNotEmpty()) phrases(reading, best).forEach { (r, s) -> add(r, s) }
+            // chat-style endings: the sentence with ？ / ！
+            if (punctPredictions && best != null && reading.last() !in "？！。、") endMark(reading, best)?.let { mark ->
+                val conv = sentences(reading + mark, context).firstOrNull()?.surface
+                if (conv != null && conv.startsWith(best.surface) && conv.length > best.surface.length) add(reading + mark, conv)
+            }
+        }
         dictPredictions(reading).forEach { (r, s, _) -> add(r, s) }
         return out.values.toList()
+    }
+
+    var predictionsFirst = true
+    var phrasePredictions = true
+    var punctPredictions = true
+
+    /** Function words a converted word can grow into while typing (generic grammar, not vocabulary). */
+    private val phraseTails = listOf(
+        "て", "に", "は", "を", "が", "と", "も", "で", "の", "へ", "から", "まで", "より",
+        "して", "した", "する", "って", "た", "ない", "ます", "です", "けど", "なら", "たら", "れば", "よう", "そう",
+    )
+    private val phraseCache = object : LinkedHashMap<String, List<Pair<String, String>>>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<Pair<String, String>>>?) = size > 256
+    }
+
+    /** ？ or ！ when [best] reads like a finished sentence (the LM expects 。 after its last word), else null. */
+    private fun endMark(reading: String, best: Sentence): Char? {
+        val m = lm ?: return null
+        val (len, word) = best.segments.last()
+        val head = LanguageModel.hash(word + '\u0001' + reading.takeLast(len))
+        if (m.cost(head, LanguageModel.hash("。\u0001。")) > 1000) return null
+        val q = m.cost(head, LanguageModel.hash("？\u0001？")); val e = m.cost(head, LanguageModel.hash("！\u0001！"))
+        return if (q <= e) '？' else '！'
+    }
+
+    /** Two likely continuations of the last word of [best]; each is converted as a whole so inflection stays right. */
+    private fun phrases(reading: String, best: Sentence): List<Pair<String, String>> {
+        val m = lm ?: return emptyList()
+        val (len, word) = best.segments.last()
+        if (word == reading.takeLast(len) && word.all { it in 'ぁ'..'ゖ' }) return emptyList() // ends in plain kana: nothing to grow
+        if (!m.knows(word + '\u0001' + reading.takeLast(len))) return emptyList() // half-typed word (兼キュ): wait
+        val key = reading + "\u0000" + best.surface
+        synchronized(phraseCache) { phraseCache[key]?.let { return it } }
+        val head = LanguageModel.hash(word + '\u0001' + reading.takeLast(len))
+        val res = phraseTails.asSequence()
+            .map { t -> t to m.cost(head, LanguageModel.hash(t + '\u0001' + t)) }
+            .sortedBy { it.second }.take(3)
+            .mapNotNull { (t, _) ->
+                val c = sentences(reading + t).firstOrNull()?.surface ?: return@mapNotNull null
+                if (c.startsWith(best.surface) && c.length > best.surface.length) (reading + t) to c else null
+            }
+            .distinctBy { it.second }.take(2).toList()
+        synchronized(phraseCache) { phraseCache[key] = res }
+        return res
     }
 
     // from one character the whole range of readings is scanned once and kept

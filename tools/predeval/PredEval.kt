@@ -30,9 +30,19 @@ object PredEval {
         val conv = Converter(
             Dictionary(map(File(assets, "dict.bin")), map(File(assets, "conn.bin"))),
             Kana.parseTable(File(assets, "en.tsv").readText()), Kana.parseTable(File(assets, "symbols.tsv").readText()),
-            lm = LanguageModel(map(File(assets, "lm.bin"))),
+            lm = LanguageModel(map(File(assets, "lm.bin"))).also { lm -> System.getenv("EVAL_UNK_SCALE")?.let { lm.unkScale = it.toFloat() } },
             predictIds = File(assets, "predict_ids.txt").readText().trim().split(' ').map { it.toInt() }.toSet(),
-        ).also { it.singleKanji = singleKanjiTable(File(assets, "single_kanji.tsv").readText()) }
+        ).also { c ->
+            c.singleKanji = singleKanjiTable(File(assets, "single_kanji.tsv").readText())
+            // tuning knobs for experiments (defaults = the app's)
+            System.getenv("EVAL_LMW")?.let { c.lmWeight = it.toFloat() }
+            System.getenv("EVAL_UNK_NODE")?.let { c.unkNodeCost = it.toInt() }
+            System.getenv("EVAL_PFIRST")?.let { c.predictionsFirst = it == "1" }
+            System.getenv("EVAL_PHRASE")?.let { c.phrasePredictions = it == "1" }
+            System.getenv("EVAL_PUNCT")?.let { c.punctPredictions = it == "1" }
+            System.getenv("EVAL_CAP1")?.let { c.boostCap1 = it.toInt() }
+            System.getenv("EVAL_CAP2")?.let { c.boostCap2 = it.toInt() }
+        }
 
         var simCost = 0; var simBase = 0
         /** Simulated taps for entering [surface] (reading [reading]) after [ctx0]. */
@@ -91,8 +101,14 @@ object PredEval {
                 if (top == surface) conv1++
                 detail.append("$id\t$reading\t$surface\tfirst=$firstAt/$n\tsim=$sim/${n + 1}\tconv=${top == surface}\t$top\n")
             }
-            // learn it the way the IME does for an explicit pick
-            conv.history.learn(reading, surface)
+            // learn it the way the IME does (FlickIMEService.learnFrom): a whole sentence teaches each of
+            // its words lightly (weight 1) and itself (weight 2) when short; anything else counts as a pick
+            val segs = conv.sentences(reading, ctx).firstOrNull { it.surface == surface }?.segments
+            if (segs != null && segs.size >= 2) {
+                var off = 0
+                for ((len, w) in segs) { if (off + len > reading.length) break; conv.history.learn(reading.substring(off, off + len), w, weight = 1); off += len }
+                if (reading.length <= 10) conv.history.learn(reading, surface)
+            } else conv.history.learn(reading, surface)
         }
         out?.writeText(detail.toString())
         fun pct(a: Int, b: Int) = "%.1f%%".format(100.0 * a / maxOf(b, 1))
