@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<input-method xmlns:android="http://schemas.android.com/apk/res/android"
+    android:settingsActivity="dev.flickime.SettingsActivity"
+    android:supportsSwitchingToNextInputMethod="true">
+    <subtype android:label="日本語" android:imeSubtypeLocale="ja_JP" android:imeSubtypeMode="keyboard" />
+</input-method>
