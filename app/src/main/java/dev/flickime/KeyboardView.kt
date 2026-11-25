@@ -65,10 +65,12 @@ class KeyboardView(context: Context, private val listener: Listener, private val
     private val trail = ArrayList<GlideDecoder.P>()
 
     private val repeat = Handler(Looper.getMainLooper())
+    /** Key that repeats while held: ⌫, and ◀▶ (cursor) */
+    private var repeatAction = Action.Backspace
     private val repeater = object : Runnable {
         override fun run() {
-            listener.onAction(Action.Backspace)
-            repeat.postDelayed(this, 60)
+            listener.onAction(repeatAction)
+            repeat.postDelayed(this, if (repeatAction == Action.Backspace) 60 else 70)
         }
     }
 
@@ -283,8 +285,10 @@ class KeyboardView(context: Context, private val listener: Listener, private val
         spaceDrag = false; spaceAnchorX = x
         trail.clear(); trail.add(GlideDecoder.P(x, y))
         performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-        if (pressed?.action == Action.Backspace) {
-            listener.onAction(Action.Backspace)
+        val a = pressed?.action
+        if (a == Action.Backspace || a == Action.Left || a == Action.Right) {
+            repeatAction = a
+            listener.onAction(a)
             repeat.postDelayed(repeater, 400)
         }
         if (pressed?.action == Action.Shift) { shiftLongPressed = false; repeat.postDelayed(shiftLock, 400) }
@@ -424,7 +428,7 @@ class KeyboardView(context: Context, private val listener: Listener, private val
                 }
                 lastShiftTap = now
             }
-            Action.Backspace -> Unit // handled on down / repeat
+            Action.Backspace, Action.Left, Action.Right -> Unit // handled on down / repeat
             else -> listener.onAction(effective(k))
         }
     }
