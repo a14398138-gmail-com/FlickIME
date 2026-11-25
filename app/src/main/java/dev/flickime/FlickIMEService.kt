@@ -794,9 +794,16 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         if (glideMode && action == Action.Backspace) {
             // like Gboard: backspace right after a glide removes the whole word,
             // but only if the cursor is still right after it
-            val before = ic.getTextBeforeCursor(glideCommitted.length, 0)?.toString()
+            val word = glideCommitted.removePrefix(glidePrefix)
+            val before = ic.getTextBeforeCursor(glideCommitted.length, 0)?.toString().orEmpty()
             endGlide()
-            if (before == glideCommitted) ic.deleteSurroundingText(glideCommitted.length, 0) else sendKey(KeyEvent.KEYCODE_DEL)
+            when {
+                // the word plus the space we put in front of it
+                before == glidePrefix + word -> ic.deleteSurroundingText(before.length, 0)
+                // some apps trim or change that space: still remove the whole word
+                word.isNotEmpty() && before.endsWith(word) -> ic.deleteSurroundingText(word.length, 0)
+                else -> sendKey(KeyEvent.KEYCODE_DEL)
+            }
             return
         }
         endGlide()
@@ -887,7 +894,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         if (reading.isEmpty() && (newSelStart != oldSelStart || newSelEnd != oldSelEnd) && candidatesStart < 0) {
             // a jump that is not explained by our own typing breaks word tracking
             val typedJump = newSelStart == newSelEnd && newSelStart - oldSelEnd in 0..(if (glideMode) glideCommitted.length else 1)
-            if (!typedJump) { typedWord.setLength(0); typedWordValid = false }
+            if (!typedJump) { typedWord.setLength(0); typedWordValid = false; endGlide() }
         }
     }
 
