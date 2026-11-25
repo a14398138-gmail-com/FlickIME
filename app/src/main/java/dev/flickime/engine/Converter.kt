@@ -320,16 +320,19 @@ class Converter(
         if (v != cacheVersion) { cache.clear(); zenzCache.clear(); cacheVersion = v }
     }
 
-    /** Whole-reading conversions, best first (zenz order when it has run for this reading). */
-    @Synchronized fun sentences(reading: String): List<Sentence> {
+    /** zenz results depend on the text before the composition, so it is part of the key. */
+    private fun zkey(reading: String, context: String) = context.takeLast(40) + "\u0000" + reading
+
+    /** Whole-reading conversions, best first (zenz order when it has run for this reading in this context). */
+    @Synchronized fun sentences(reading: String, context: String = ""): List<Sentence> {
         if (reading.isEmpty()) return emptyList()
         checkVersion()
-        zenzCache[reading]?.let { return it }
+        zenzCache[zkey(reading, context)]?.let { return it }
         return ngramSentences(reading)
     }
 
-    /** Has zenz already ranked this reading? */
-    @Synchronized fun zenzRanked(reading: String): Boolean { checkVersion(); return zenzCache.containsKey(reading) }
+    /** Has zenz already ranked this reading in this context? */
+    @Synchronized fun zenzRanked(reading: String, context: String): Boolean { checkVersion(); return zenzCache.containsKey(zkey(reading, context)) }
 
     /**
      * Re-ranks the sentence candidates of [reading] with zenz (slow: call off the typing thread).
@@ -344,7 +347,7 @@ class Converter(
         val ranked = base.indices.sortedBy { base[it].score * zenzWeight / 1000f + nll[it] }.map { base[it] }
         synchronized(this) {
             if (version != cacheVersion) return false
-            zenzCache[reading] = ranked
+            zenzCache[zkey(reading, context)] = ranked
         }
         return ranked.first() !== base.first()
     }
@@ -409,13 +412,13 @@ class Converter(
         return out
     }
 
-    fun candidates(reading: String, limit: Int = 200): List<Candidate> {
+    fun candidates(reading: String, context: String = "", limit: Int = 200): List<Candidate> {
         val n = reading.length
         if (n == 0) return emptyList()
         val out = LinkedHashMap<Pair<String, Int>, Candidate>()
         fun add(c: Candidate) { if (out.size < limit) out.putIfAbsent(c.surface to c.consumed, c) }
 
-        val ranked = sentences(reading)
+        val ranked = sentences(reading, context)
         val path = ranked.first().segments
         val full = words(reading, limit)
         add(Candidate(ranked.first().surface, n, Candidate.Kind.SENTENCE, path))

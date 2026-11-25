@@ -83,7 +83,10 @@ object Engine {
 }
 
 class FlickIMEService : InputMethodService(), KeyboardView.Listener {
+    /** Conversion only (candidates, zenz). */
     private val worker = Executors.newSingleThreadExecutor()
+    /** File I/O (log, history, dictionary, clipboard) so saving never delays the next candidates. */
+    private val io = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
 
     private lateinit var keyboard: KeyboardView
@@ -144,7 +147,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         val conv = Engine.converter ?: return null
         if (conv.userDict.add(r, s)) {
             val text = conv.userDict.serialize()
-            worker.execute { UserDictStore.save(applicationContext, text) }
+            io.execute { UserDictStore.save(applicationContext, text) }
             return r to s
         }
         return null
@@ -216,7 +219,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
                 lc.dictWord?.let { (r, s) ->
                     if (conv.userDict.remove(r, s)) {
                         val text = conv.userDict.serialize()
-                        worker.execute { UserDictStore.save(applicationContext, text) }
+                        io.execute { UserDictStore.save(applicationContext, text) }
                     }
                 }
                 historyDirty = true
@@ -239,7 +242,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
                 .put("deleted_before", corrBeyond)
                 .put("unlearned", corrUndone)
                 .put("app", currentInputEditorInfo?.packageName ?: "")
-            worker.execute { log.append(ev) }
+            io.execute { log.append(ev) }
         }
         corrWithin = 0; corrBeyond = 0; corrUndone = false
     }
@@ -258,7 +261,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         val ctx = applicationContext
         worker.execute {
             val g = runCatching { Engine.glide(ctx) }.getOrNull() ?: return@execute
-            if (!g.contains(w)) { g.addUserWord(w); UserWordsStore.add(ctx, w) }
+            if (!g.contains(w)) { g.addUserWord(w); io.execute { UserWordsStore.add(ctx, w) } }
         }
     }
 
@@ -333,7 +336,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         ClipStore.add(clips, text)
         recentClipShownUntil = System.currentTimeMillis() + 60_000
         val snapshot = clips.toList()
-        worker.execute { ClipStore.save(applicationContext, snapshot) }
+        io.execute { ClipStore.save(applicationContext, snapshot) }
         if (::clipChip.isInitialized) { updateBarButtons(); if (clipOpen) renderClips() }
     }
 
@@ -407,7 +410,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
 
     private fun saveClips() {
         val snapshot = clips.toList()
-        worker.execute { ClipStore.save(applicationContext, snapshot) }
+        io.execute { ClipStore.save(applicationContext, snapshot) }
     }
 
     // ---- zenz: re-rank after a short pause in typing ----
@@ -423,7 +426,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         super.onCreate()
         if (Prefs.zenzEnabled(this)) zenzWorker.execute { Engine.loadZenz(applicationContext) }
         clipboard.addPrimaryClipChangedListener(clipListener)
-        worker.execute { val loaded = ClipStore.load(applicationContext); main.post { clips.addAll(0, loaded.filter { l -> clips.none { it.text == l.text } }) } }
+        io.execute { val loaded = ClipStore.load(applicationContext); main.post { clips.addAll(0, loaded.filter { l -> clips.none { it.text == l.text } }) } }
         log = CommitLog(this)
         worker.execute { runCatching { Engine.get(applicationContext); Engine.glide(applicationContext) } }
     }
@@ -708,6 +711,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         runCatching { clipboard.removePrimaryClipChangedListener(clipListener) }
         saveHistory()
         worker.shutdown()
+        io.shutdown()
         zenzWorker.shutdown()
         super.onDestroy()
     }
@@ -716,7 +720,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         if (!historyDirty) return
         historyDirty = false
         val text = Engine.converter?.history?.serialize() ?: return
-        worker.execute { HistoryStore.save(applicationContext, text) }
+        io.execute { HistoryStore.save(applicationContext, text) }
     }
 
     private fun applyMode() {
@@ -934,19 +938,21 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         val r = reading.toString()
         val my = ++seq
         if (r.isEmpty()) { candidates = emptyList(); renderCandidates(); return }
+        // snapshot main-thread state now: the worker must not read fields that keep changing
+        val sl = segLen
+        val ctx = if (privateField) "" else compositionContext
+        val useZenz = Prefs.zenzEnabled(this)
         worker.execute {
             if (my != seq) return@execute // a newer keystroke is already queued
-            val sl = segLen
-            val ctx = if (privateField) "" else compositionContext
             val cands = runCatching {
                 val conv = Engine.get(applicationContext)
                 // zenz ranks the sentences before anything is shown (no n-gram first, no swap later)
-                if (sl == 0 && r.length >= 2 && conv.zenz != null && Prefs.zenzEnabled(this) && !conv.zenzRanked(r)) {
+                if (sl == 0 && r.length >= 2 && conv.zenz != null && useZenz && !conv.zenzRanked(r, ctx)) {
                     if (my != seq) return@execute
                     conv.zenzRerank(r, ctx)
                     if (my != seq) return@execute
                 }
-                if (sl in 1..r.length) conv.segmentCandidates(r, sl) else conv.candidates(r)
+                if (sl in 1..r.length) conv.segmentCandidates(r, sl) else conv.candidates(r, ctx)
             }.getOrElse {
                 listOf(Candidate(r, r.length, Candidate.Kind.KANA), Candidate(Kana.toKatakana(r), r.length, Candidate.Kind.KANA))
             }
@@ -994,7 +1000,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
                     .put("full_reading", full)
                     .put("context_before", before)
                 c.segments?.let { segs -> ev.put("segments", org.json.JSONArray(segs.map { it.second })) }
-                worker.execute { log.append(ev) }
+                io.execute { log.append(ev) }
             }
         }
 

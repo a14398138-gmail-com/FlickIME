@@ -179,7 +179,9 @@ object BackgroundImage {
         while (bounds.outWidth / (sample * 2) >= maxW) sample *= 2
         val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return false
         val scaled = if (bmp.width > maxW) Bitmap.createScaledBitmap(bmp, maxW, bmp.height * maxW / bmp.width, true) else bmp
-        file(c).outputStream().use { scaled.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+        val buf = java.io.ByteArrayOutputStream()
+        scaled.compress(Bitmap.CompressFormat.JPEG, 90, buf)
+        atomicWrite(file(c), buf.toByteArray())
         Prefs.touchBackground(c)
         return true
     }

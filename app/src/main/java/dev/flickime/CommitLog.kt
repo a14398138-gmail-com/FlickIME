@@ -108,7 +108,7 @@ object Prefs {
 object HistoryStore {
     private fun f(c: Context) = File(c.filesDir, "history.bin")
     fun load(c: Context): String = runCatching { String(Crypto.decrypt(f(c).readBytes())) }.getOrDefault("")
-    fun save(c: Context, text: String) { runCatching { f(c).writeBytes(Crypto.encrypt(text.toByteArray())) } }
+    fun save(c: Context, text: String) { runCatching { atomicWrite(f(c), Crypto.encrypt(text.toByteArray())) } }
     fun clear(c: Context) { f(c).delete() }
 }
 
@@ -116,7 +116,7 @@ object HistoryStore {
 object UserDictStore {
     private fun f(c: Context) = File(c.filesDir, "userdict.bin")
     fun load(c: Context): String = runCatching { String(Crypto.decrypt(f(c).readBytes())) }.getOrDefault("")
-    fun save(c: Context, text: String) { runCatching { f(c).writeBytes(Crypto.encrypt(text.toByteArray())) } }
+    fun save(c: Context, text: String) { runCatching { atomicWrite(f(c), Crypto.encrypt(text.toByteArray())) } }
     fun clear(c: Context) { f(c).delete() }
 }
 
@@ -127,7 +127,7 @@ object UserWordsStore {
         runCatching { String(Crypto.decrypt(f(c).readBytes())).lines().filter { it.isNotBlank() } }.getOrDefault(emptyList())
     @Synchronized fun add(c: Context, word: String) {
         val all = (load(c) + word).distinct()
-        runCatching { f(c).writeBytes(Crypto.encrypt(all.joinToString("\n").toByteArray())) }
+        runCatching { atomicWrite(f(c), Crypto.encrypt(all.joinToString("\n").toByteArray())) }
     }
     fun clear(c: Context) { f(c).delete() }
 }
@@ -150,7 +150,7 @@ object ClipStore {
     fun save(c: Context, items: List<ClipItem>) {
         val arr = org.json.JSONArray()
         items.forEach { arr.put(JSONObject().put("t", it.text).put("p", it.pinned).put("ts", it.time)) }
-        runCatching { f(c).writeBytes(Crypto.encrypt(arr.toString().toByteArray())) }
+        runCatching { atomicWrite(f(c), Crypto.encrypt(arr.toString().toByteArray())) }
     }
 
     /** Newest first; pinned items are never dropped. */
@@ -166,4 +166,14 @@ object ClipStore {
     @Volatile var generation = 0
 
     fun clear(c: Context) { f(c).delete(); generation++ }
+}
+
+/**
+ * Writes via a temp file + fsync + rename, so being killed mid-save can never leave a
+ * half-written (and therefore undecryptable) history or dictionary behind.
+ */
+fun atomicWrite(target: File, bytes: ByteArray) {
+    val tmp = File(target.parentFile, target.name + ".tmp")
+    java.io.FileOutputStream(tmp).use { o -> o.write(bytes); o.fd.sync() }
+    if (!tmp.renameTo(target)) { target.delete(); check(tmp.renameTo(target)) { "rename failed" } }
 }
