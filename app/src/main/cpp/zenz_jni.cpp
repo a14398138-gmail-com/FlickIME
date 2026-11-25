@@ -76,7 +76,7 @@ Java_dev_flickime_engine_Zenz_nativeLoad(JNIEnv *env, jclass, jstring path, jint
     env->ReleaseStringUTFChars(path, p);
     if (!model) { LOGE("model load failed"); return 0; }
     llama_context_params cp = llama_context_default_params();
-    cp.n_ctx = 2048;
+    cp.n_ctx = 1024;  // prompt + prefix tree; KV of the medium model is ~100 MB at this size
     cp.n_batch = 1024;
     cp.n_ubatch = 1024;
     cp.n_seq_max = MAX_SEQ;
@@ -136,7 +136,7 @@ Java_dev_flickime_engine_Zenz_nativeScore(JNIEnv *env, jclass, jlong handle, jby
                     for (size_t q = 0; q < nodes.size(); q++)
                         if (nodes[q].child_start == parent && nodes[q].tok == c[k] && nodes[q].pos == np + (int) k) { found = (int) q; break; }
                     if (found < 0) {
-                        if (nodes.size() >= 1024) { usable[i] = false; break; }
+                        if ((int) nodes.size() + np >= 1016) { usable[i] = false; break; }
                         nodes.push_back({c[k], np + (int) k, {}, parent});
                         found = (int) nodes.size() - 1;
                     }

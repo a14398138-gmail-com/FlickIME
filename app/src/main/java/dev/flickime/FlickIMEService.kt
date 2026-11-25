@@ -43,14 +43,20 @@ object Engine {
         zenzTried = true
         runCatching {
             System.loadLibrary("zenzjni")
-            // llama.cpp needs a real file: copy the model out of the APK once
-            val f = java.io.File(c.filesDir, "zenz-v3.1-small.gguf")
-            val size = c.assets.openFd("zenz.gguf").use { it.length }
+            // llama.cpp needs a real file: copy the model out of the APK once.
+            // zenz-medium.gguf (zenz-v2.5-medium, v2 prompt) when the build has it, else zenz.gguf (v3.1-small)
+            val medium = runCatching { c.assets.openFd("zenz-medium.gguf").use { true } }.getOrDefault(false)
+            val asset = if (medium) "zenz-medium.gguf" else "zenz.gguf"
+            val f = java.io.File(c.filesDir, if (medium) "zenz-v2.5-medium.gguf" else "zenz-v3.1-small.gguf")
+            // drop the other model's copy
+            java.io.File(c.filesDir, if (medium) "zenz-v3.1-small.gguf" else "zenz-v2.5-medium.gguf").delete()
+            val size = c.assets.openFd(asset).use { it.length }
             if (!f.exists() || f.length() != size) {
                 val tmp = java.io.File(c.filesDir, "zenz.tmp")
-                c.assets.open("zenz.gguf").use { i -> tmp.outputStream().use { o -> i.copyTo(o, 1 shl 16) } }
+                c.assets.open(asset).use { i -> tmp.outputStream().use { o -> i.copyTo(o, 1 shl 16) } }
                 tmp.renameTo(f)
             }
+            dev.flickime.engine.Zenz.v2Prompt = medium
             val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
             dev.flickime.engine.Zenz.load(f.path, threads)?.let { z -> get(c).zenz = z }
         }.onFailure { android.util.Log.e("FlickIME", "zenz unavailable", it) }

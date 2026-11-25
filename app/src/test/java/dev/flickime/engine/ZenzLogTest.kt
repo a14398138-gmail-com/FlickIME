@@ -8,6 +8,7 @@ class ZenzLogTest {
         val lib = System.getenv("ZENZ_LIB"); val model = System.getenv("ZENZ_MODEL"); val dir = System.getenv("EVAL_DIR")
         assumeTrue(lib != null && model != null && dir != null)
         System.load(lib)
+        if (System.getenv("ZENZ_V2") == "1") Zenz.v2Prompt = true
         val f = ConverterTest::class.java.getDeclaredMethod("getConv").apply { isAccessible = true }
         val conv = f.invoke(ConverterTest()) as Converter
         conv.zenz = Zenz.load(model!!, 2)

@@ -21,10 +21,17 @@ class Zenz private constructor(private var handle: Long) {
 
         fun load(path: String, threads: Int): Zenz? = nativeLoad(path, threads).takeIf { it != 0L }?.let { Zenz(it) }
 
-        /** zenz v3 prompt: [ left context]  katakana reading  */
+        /**
+         * Prompt layout. v3: [EE02 left context] EE00 katakana EE01.
+         * v2 / v2.5 (the medium model): EE00 katakana [EE02 left context] EE01 (AzooKey's ZenzPromptBuilder).
+         */
+        @Volatile var v2Prompt = false
+
         fun prompt(reading: String, context: String): String {
-            val ctx = context.takeLast(40).replace(' ', '　')
-            return (if (ctx.isNotEmpty()) "$ctx" else "") + "" + Kana.toKatakana(reading) + ""
+            val ctx = context.takeLast(40).replace(' ', '\u3000')
+            val input = "\uEE00" + Kana.toKatakana(reading)
+            return if (v2Prompt) input + (if (ctx.isNotEmpty()) "\uEE02$ctx" else "") + "\uEE01"
+            else (if (ctx.isNotEmpty()) "\uEE02$ctx" else "") + input + "\uEE01"
         }
     }
 }

@@ -10,12 +10,17 @@ android {
         applicationId = "dev.flickime"
         minSdk = 26
         targetSdk = 35
-        versionCode = 56
-        versionName = "0.56"
+        versionCode = 57
+        versionName = "0.57"
         ndk { abiFilters += listOf("arm64-v8a") }
         externalNativeBuild { cmake { arguments += listOf("-DCMAKE_BUILD_TYPE=Release", "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON", "-DGGML_CPU_ARM_ARCH=armv8.6-a+dotprod+i8mm+fp16") } }
     }
-    androidResources { noCompress += listOf("bin", "gguf") }
+    androidResources {
+        noCompress += listOf("bin", "gguf")
+        // with the medium zenz model present (not in git: tools/zenz_medium_gguf.py), leave the small one out
+        if (file("src/main/assets/zenz-medium.gguf").exists())
+            ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~:!zenz.gguf"
+    }
     ndkVersion = "27.2.12479018"
     externalNativeBuild {
         cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" }

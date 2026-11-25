@@ -7,3 +7,5 @@ app/.cxx/
 # personal evaluation data (built from the commit log; never commit)
 eval/
 out/
+# large model, built with tools/zenz_medium_gguf.py
+app/src/main/assets/zenz-medium.gguf

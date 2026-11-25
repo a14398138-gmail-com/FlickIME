@@ -206,7 +206,7 @@ class SettingsActivity : Activity() {
             }
         })
         col.addView(text("書き出したファイルは暗号化されていません。扱いに注意してください。ログの鍵はこの端末のキーストアにあり、アプリを削除すると暗号化ログは読めなくなります。", 13f))
-        col.addView(text("辞書: Mozc dictionary_oss（BSD / IPAdic）、英単語: JMdict（EDRDG, CC BY-SA 4.0）、wordfreq（CC BY-SA 4.0）、言語モデル: Wikipedia（CC BY-SA）・Tatoeba（CC BY 2.0 FR）、zenz-v3.1-small（三輪敬太, CC BY-SA 4.0）、llama.cpp（MIT）", 12f))
+        col.addView(text("辞書: Mozc dictionary_oss（BSD / IPAdic）、英単語: JMdict（EDRDG, CC BY-SA 4.0）、wordfreq（CC BY-SA 4.0）、言語モデル: Wikipedia（CC BY-SA）・Tatoeba（CC BY 2.0 FR）、zenz-v3.1-small / zenz-v2.5-medium（三輪敬太, CC BY-SA 4.0）、llama.cpp（MIT）", 12f))
         setContentView(ScrollView(this).apply { addView(col) })
     }
 

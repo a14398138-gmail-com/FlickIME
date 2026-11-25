@@ -15,6 +15,7 @@ class ZenzTest {
         val lib = System.getenv("ZENZ_LIB"); val model = System.getenv("ZENZ_MODEL")
         assumeTrue(lib != null && model != null)
         System.load(lib)
+        if (System.getenv("ZENZ_V2") == "1") Zenz.v2Prompt = true
         val z = Zenz.load(model!!, 2)!!
         println("ZENZ nll 私は学生です=${z.score("わたしはがくせいです", "", listOf("私は学生です", "渡しは学生です")).contentToString()}")
         val conv = Converter(Dictionary(map(File(assets, "dict.bin")), map(File(assets, "conv.bin".replace("conv", "conn")))), emptyMap(), emptyMap(),
