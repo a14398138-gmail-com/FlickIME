@@ -865,6 +865,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     override fun onText(text: String) {
         endGlide()
         finishCorrection()
+        if (cursorLeftComposition()) dropComposition()
         if (mode == Mode.ALPHA) trackTyped(text)
         if (mode != Mode.KANA) {
             currentInputConnection?.commitText(text, 1)
@@ -896,6 +897,8 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
             return
         }
         endGlide()
+        // the user moved the cursor away and the editor dropped our composing region without telling us
+        if (cursorLeftComposition()) dropComposition()
         if (action == Action.Backspace && typedWord.isNotEmpty()) typedWord.deleteCharAt(typedWord.length - 1)
         else if (action == Action.Left || action == Action.Right) { typedWord.setLength(0); typedWordValid = false }
         else if (action != Action.Backspace && action != Action.Shift) finishTypedWord()
@@ -972,19 +975,39 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         // composing region (candidatesStart < 0); that is not the user moving the cursor.
         val movedOutside = candidatesStart >= 0 &&
             (newSelStart != newSelEnd || newSelStart < candidatesStart || newSelEnd > candidatesEnd)
-        if (reading.isNotEmpty() && movedOutside) {
-            currentInputConnection?.finishComposingText()
-            seq++
-            reading.setLength(0); candidates = emptyList(); selected = -1; segLen = 0
-            resetCompound(); compWords.clear()
-            if (::keyboard.isInitialized) keyboard.composing = false
-            if (::candRow.isInitialized) renderCandidates()
-        }
+        // Some editors (Chrome, …) drop the composing region when the user taps elsewhere and then
+        // report candidatesStart < 0, the same as while our own edits are in flight: tell the two
+        // apart by checking that the text before the cursor still ends with what we are composing.
+        val movedAway = movedOutside || reading.isNotEmpty() && candidatesStart < 0 &&
+            (newSelStart != oldSelStart || newSelEnd != oldSelEnd) && cursorLeftComposition()
+        if (reading.isNotEmpty() && movedAway) dropComposition()
         if (reading.isEmpty() && (newSelStart != oldSelStart || newSelEnd != oldSelEnd) && candidatesStart < 0) {
             // a jump that is not explained by our own typing breaks word tracking
             val typedJump = newSelStart == newSelEnd && newSelStart - oldSelEnd in 0..(if (glideMode) glideCommitted.length else 1)
             if (!typedJump) { typedWord.setLength(0); typedWordValid = false; endGlide() }
         }
+    }
+
+    /** What [showComposing] last put in the editor. */
+    private var shownComposing = ""
+
+    private fun cursorLeftComposition(): Boolean {
+        if (reading.isEmpty() || shownComposing.isEmpty()) return false
+        val ic = currentInputConnection ?: return false
+        if (!ic.getSelectedText(0).isNullOrEmpty()) return true
+        val before = ic.getTextBeforeCursor(shownComposing.length, 0)?.toString() ?: return false
+        return before != shownComposing
+    }
+
+    /** Leaves the kana where it is and forgets the composition. */
+    private fun dropComposition() {
+        currentInputConnection?.finishComposingText()
+        seq++
+        reading.setLength(0); candidates = emptyList(); selected = -1; segLen = 0
+        shownComposing = ""
+        resetCompound(); compWords.clear()
+        if (::keyboard.isInitialized) keyboard.composing = false
+        if (::candRow.isInitialized) renderCandidates()
     }
 
     private fun sendKey(code: Int) {
@@ -1016,6 +1039,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
                 setSpan(android.text.style.UnderlineSpan(), 0, length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
         } else reading.toString()
+        shownComposing = text.toString()
         ic.setComposingText(text, 1)
     }
 
