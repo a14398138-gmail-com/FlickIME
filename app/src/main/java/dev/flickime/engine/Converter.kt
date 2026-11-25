@@ -508,7 +508,6 @@ class Converter(
             ws.forEach { add(Candidate(it, l, Candidate.Kind.WORD)) }
             english[r]?.forEach { add(Candidate(it, l, Candidate.Kind.ENGLISH)) }
             if (idx == 0) symbols[r]?.take(8)?.forEach { add(Candidate(it, l, Candidate.Kind.SYMBOL)) }
-            if (idx == 0) kanjiOf(r).forEach { add(Candidate(it, l, Candidate.Kind.WORD)) }
         }
         return reorder(out.values.toList(), reading)
     }

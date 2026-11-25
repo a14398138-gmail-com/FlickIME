@@ -997,7 +997,11 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         else if (reading.isNotEmpty() && candidatesStart >= 0) {
             composeStart = candidatesStart
             // the user tapped inside the unconverted composition: keep composing, move our cursor there
-            if (newSelStart == newSelEnd && selected < 0 && candidatesEnd - candidatesStart == reading.length) {
+            // Only a real tap: the cursor actually moved, and not as the echo of our own edit. Some editors
+            // report the new composing text before the new cursor, which looked like a tap inside it.
+            val ownEcho = android.os.SystemClock.uptimeMillis() - lastComposeAt < 250
+            if (!ownEcho && newSelStart != oldSelStart && newSelStart == newSelEnd && selected < 0 &&
+                candidatesEnd - candidatesStart == reading.length) {
                 val p = newSelStart - candidatesStart
                 val next = if (p >= reading.length) -1 else p
                 if (next != cur) { cur = next; shownCaret = caret; refresh() }
@@ -1013,6 +1017,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     /** What [showComposing] last put in the editor, and where the cursor is inside it. */
     private var shownComposing = ""
     private var shownCaret = 0
+    private var lastComposeAt = 0L
 
     /** Cursor inside the (unconverted) composition, or -1 = at its end. */
     private var cur = -1
@@ -1079,6 +1084,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
             }
         } else reading.toString()
         shownComposing = text.toString()
+        lastComposeAt = android.os.SystemClock.uptimeMillis()
         val at = if (selected >= 0) text.length else caret
         if (at < text.length && composeStart < 0) {
             // not reported by the editor yet: work it out from the cursor after placing the text at the end
