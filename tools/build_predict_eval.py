@@ -9,7 +9,7 @@ Writes OUT_DIR/events.jsonl: every usable commit in time order, one per line:
   they were wrong, so they are neither learned nor scored
 - "target": scored for prediction (2..12 reading chars, surface is not just the kana / a symbol)
 - split by time: first 60% "warm" (only learned), next 20% "dev" (tune on this), last 20% "test" (report only)
-Also writes OUT_DIR/bad.tsv (👎 reports: reading, the answer the user then committed, context, shown candidates),
+Also writes OUT_DIR/bad.tsv (👎 reports: reading, the text the user wrote instead before pressing ✓, context, shown candidates),
 OUT_DIR/events.tsv (same rows, for the JVM test) and OUT_DIR/summary.json.
 """
 import json, sys, os, re
