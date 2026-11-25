@@ -34,7 +34,7 @@ class AjimeeTest {
         }
         fun unesc(s: String) = s.replace("\\n", "\n").replace("\\t", "\t")
         // [with context, without] x [n, acc, cerSum]
-        val n = IntArray(2); val acc = IntArray(2); val cer = DoubleArray(2); var oracle = 0
+        val n = IntArray(2); val acc = IntArray(2); val cer = DoubleArray(2); var oracle = 0; var oracle4 = 0; val top4 = IntArray(2)
         val useCtx = System.getenv("AJIMEE_NOCTX") != "1"
         var ms = 0L
         val misses = StringBuilder()
@@ -45,9 +45,12 @@ class AjimeeTest {
             val t0 = System.nanoTime()
             if (conv.zenz != null) conv.zenzRerank(reading, ctx)
             val got = conv.sentences(reading, ctx).first().surface
+            // what the candidate bar shows first (≈ 4 on a phone): is an accepted answer among them?
+            if (conv.candidates(reading, ctx).take(4).any { it.consumed == reading.length && it.surface in answers }) top4[k]++
             ms += (System.nanoTime() - t0) / 1_000_000
             n[k]++
             if (conv.sentences(reading, ctx).any { it.surface in answers }) oracle++
+            if (conv.zenz == null && conv.sentences(reading, ctx).take(4).any { it.surface in answers }) oracle4++
             if (got in answers) acc[k]++ else misses.append("${p[0]}\t$got\t${answers.first()}\n")
             cer[k] += answers.minOf { lev(it, got).toDouble() / it.length }
         }
@@ -55,7 +58,8 @@ class AjimeeTest {
         fun pct(a: Int, b: Int) = "%.1f%%".format(100.0 * a / b)
         val tot = n.sum()
         println("AJIMEE acc@1=${pct(acc.sum(), tot)} (ctx ${pct(acc[0], n[0])}, no-ctx ${pct(acc[1], n[1])}) " +
+            "bar-top4=${pct(top4.sum(), tot)} (ctx ${pct(top4[0], n[0])}, no-ctx ${pct(top4[1], n[1])}) " +
             "MinCER=${"%.3f".format(cer.sum() / tot)} (ctx ${"%.3f".format(cer[0] / n[0])}, no-ctx ${"%.3f".format(cer[1] / n[1])}) " +
-            "N-best oracle=${pct(oracle, tot)} ${ms / tot} ms/item n=$tot zenz=${conv.zenz != null}${if (useCtx) "" else " (context withheld)"}")
+            "N-best oracle=${pct(oracle, tot)} oracle@4=${pct(oracle4, tot)} ${ms / tot} ms/item n=$tot zenz=${conv.zenz != null}${if (useCtx) "" else " (context withheld)"}")
     }
 }
