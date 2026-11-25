@@ -10,6 +10,9 @@ with open(src, encoding='utf-8') as f:
         if len(p) < 3 or not p[1]:
             continue
         sym = p[1]
+        # hentaigana and kana with combining (semi-)voiced marks are noise in a phone IME
+        if re.search('[\u3099\u309a\U0001B000-\U0001B16F]', sym):
+            continue
         for r in p[2].split(' '):
             if re.fullmatch(r'[ぁ-ゖー]+', r):
                 lst = m.setdefault(r, [])

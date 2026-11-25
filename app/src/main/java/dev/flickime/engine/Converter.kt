@@ -170,6 +170,16 @@ class Converter(
     /** POS ids allowed as dictionary predictions (assets/predict_ids.txt); null = all. */
     private val predictIds: Set<Int>? = null,
 ) {
+    /** reading -> single kanji in Mozc's frequency order (assets/single_kanji.tsv), shown after the words. */
+    @Volatile var singleKanji: Map<String, String> = emptyMap()
+
+    private fun kanjiOf(reading: String): List<String> {
+        val s = singleKanji[reading] ?: return emptyList()
+        val out = ArrayList<String>(s.length); var i = 0
+        while (i < s.length) { val n = Character.charCount(s.codePointAt(i)); out.add(s.substring(i, i + n)); i += n }
+        return out
+    }
+
     /** How much the language model counts against the dictionary costs when ranking sentences. */
     var lmWeight = DEFAULT_LM_WEIGHT
         set(v) { field = v; synchronized(this) { cache.clear(); zenzCache.clear() } }
@@ -456,7 +466,7 @@ class Converter(
         val n = reading.length
         if (n == 0) return emptyList()
         val out = LinkedHashMap<Pair<String, Int>, Candidate>()
-        fun add(c: Candidate) { if (out.size < limit) out.putIfAbsent(c.surface to c.consumed, c) }
+        fun add(c: Candidate) { if (out.size < limit && !c.surface.any { it == '\u3099' || it == '\u309a' || it == '゜' && c.surface.length > 1 }) out.putIfAbsent(c.surface to c.consumed, c) }
 
         val ranked = sentences(reading, context)
         val path = ranked.first().segments
@@ -481,6 +491,7 @@ class Converter(
         }
         en.forEach { add(Candidate(it, n, Candidate.Kind.ENGLISH)) }
         sym.forEach { add(Candidate(it, n, Candidate.Kind.SYMBOL)) }
+        kanjiOf(reading).forEach { add(Candidate(it, n, Candidate.Kind.WORD)) }
 
         // first segment of the best path, then other prefixes (longest first)
         val firstLen = path.firstOrNull()?.first ?: n
@@ -497,6 +508,7 @@ class Converter(
             ws.forEach { add(Candidate(it, l, Candidate.Kind.WORD)) }
             english[r]?.forEach { add(Candidate(it, l, Candidate.Kind.ENGLISH)) }
             if (idx == 0) symbols[r]?.take(8)?.forEach { add(Candidate(it, l, Candidate.Kind.SYMBOL)) }
+            if (idx == 0) kanjiOf(r).forEach { add(Candidate(it, l, Candidate.Kind.WORD)) }
         }
         return reorder(out.values.toList(), reading)
     }
@@ -514,17 +526,28 @@ class Converter(
         }
         history.completions(reading, limit).forEach { (r, s, _) -> add(r, s) }
         userDict.completions(reading).take(limit).forEach { (r, s) -> add(r, s) }
-        if (reading.length >= 2) {
-            // short completions first: each extra character costs a bit
-            dict.completions(reading, maxExtra = 6, limit = 12, pos = { predictIds == null || it in predictIds })
-                // rare additions (web names, cost >= 6000) only if the language model has seen them;
-                // the user's own rare words come from their history instead
-                .map { (r, sf, cost) -> Triple(r, sf, if (lm == null || lm.knows(sf + '\u0001' + r)) cost else cost + 1500) }
-                .filter { it.third < 7500 }
-                .sortedBy { (r, _, cost) -> cost + 350 * (r.length - reading.length) }
-                .forEach { (r, s, _) -> if (!s.all { it in 'ぁ'..'ゖ' } || r.length - reading.length >= 2) add(r, s) }
-        }
+        dictPredictions(reading).forEach { (r, s, _) -> add(r, s) }
         return out.values.toList()
+    }
+
+    // from one character the whole range of readings is scanned once and kept
+    private val firstCharPredictions = HashMap<String, List<Triple<String, String, Int>>>()
+
+    private fun dictPredictions(reading: String): List<Triple<String, String, Int>> {
+        val one = reading.length == 1
+        if (one) synchronized(firstCharPredictions) { firstCharPredictions[reading]?.let { return it } }
+        // short completions first: each extra character costs a bit
+        val res = dict.completions(reading, maxExtra = if (one) 4 else 6, limit = 24, pos = { predictIds == null || it in predictIds },
+            scan = if (one) Int.MAX_VALUE else 4000)
+            // rare additions (web names, cost >= 6000) only if the language model has seen them;
+            // the user's own rare words come from their history instead
+            .map { (r, sf, cost) -> Triple(r, sf, if (lm == null || lm.knows(sf + '\u0001' + r)) cost else cost + 1500) }
+            .filter { it.third < (if (one) 6000 else 7500) }
+            .filter { (r, s, _) -> !s.all { it in 'ぁ'..'ゖ' } || r.length - reading.length >= 2 }
+            .sortedBy { (r, _, cost) -> cost + 350 * (r.length - reading.length) }
+            .take(8)
+        if (one) synchronized(firstCharPredictions) { firstCharPredictions[reading] = res }
+        return res
     }
 
     /** Reading length of the first segment the converter would pick on its own. */
@@ -539,7 +562,7 @@ class Converter(
         val l = len.coerceIn(1, n)
         val seg = reading.substring(0, l)
         val out = LinkedHashMap<Pair<String, Int>, Candidate>()
-        fun add(c: Candidate) { if (out.size < limit) out.putIfAbsent(c.surface to c.consumed, c) }
+        fun add(c: Candidate) { if (out.size < limit && !c.surface.any { it == '\u3099' || it == '\u309a' || it == '゜' && c.surface.length > 1 }) out.putIfAbsent(c.surface to c.consumed, c) }
         val path = bestPath(reading)
         val sameAsAuto = path.firstOrNull()?.first == l
         var ws = words(seg, limit).ifEmpty { listOf(bestPath(seg).joinToString("") { it.second }) }
@@ -555,6 +578,7 @@ class Converter(
         }
         english[seg]?.forEach { add(Candidate(it, l, Candidate.Kind.ENGLISH)) }
         symbols[seg]?.forEach { add(Candidate(it, l, Candidate.Kind.SYMBOL)) }
+        kanjiOf(seg).forEach { add(Candidate(it, l, Candidate.Kind.WORD)) }
         add(Candidate(seg, l, Candidate.Kind.KANA))
         add(Candidate(Kana.toKatakana(seg), l, Candidate.Kind.KANA))
         return reorder(out.values.toList(), reading)
@@ -569,6 +593,11 @@ class Converter(
         const val MAX_POPS = 4000
         const val PAIR_BONUS = 800
     }
+}
+
+/** single_kanji.tsv: reading \t kanji kanji ... (one string) */
+fun singleKanjiTable(text: String): Map<String, String> = HashMap<String, String>().apply {
+    text.lineSequence().forEach { l -> val t = l.indexOf('\t'); if (t > 0 && t < l.length - 1) put(l.substring(0, t), l.substring(t + 1)) }
 }
 
 object Kana {

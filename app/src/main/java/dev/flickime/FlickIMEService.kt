@@ -75,6 +75,7 @@ object Engine {
             val lm = runCatching { LanguageModel(map("lm.bin")) }.getOrNull()
             val predictIds = runCatching { c.assets.open("predict_ids.txt").bufferedReader().readText().trim().split(' ').map { it.toInt() }.toSet() }.getOrNull()
             Converter(Dictionary(map("dict.bin"), conn), table("en.tsv"), table("symbols.tsv"), lm = lm, predictIds = predictIds).also {
+                it.singleKanji = runCatching { dev.flickime.engine.singleKanjiTable(c.assets.open("single_kanji.tsv").bufferedReader().readText()) }.getOrDefault(emptyMap())
                 it.history.load(HistoryStore.load(c))
                 it.userDict.load(UserDictStore.load(c))
                 converter = it

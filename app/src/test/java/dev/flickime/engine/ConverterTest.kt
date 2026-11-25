@@ -16,6 +16,7 @@ class ConverterTest {
         Converter(Dictionary(map("dict.bin"), map("conn.bin")), Kana.parseTable(File(assets, "en.tsv").readText()), Kana.parseTable(File(assets, "symbols.tsv").readText()),
             lm = LanguageModel(RandomAccessFile(File(assets, "lm.bin"), "r").use { it.channel.map(FileChannel.MapMode.READ_ONLY, 0, it.length()) }),
             predictIds = File(assets, "predict_ids.txt").readText().trim().split(' ').map { it.toInt() }.toSet())
+            .also { it.singleKanji = singleKanjiTable(File(assets, "single_kanji.tsv").readText()) }
     }
 
     private fun top(r: String) = conv.candidates(r).first().surface
