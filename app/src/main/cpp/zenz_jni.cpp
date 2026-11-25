@@ -21,7 +21,8 @@ struct Zenz {
     int n_vocab = 0;
 };
 
-constexpr llama_token END = 3;  // "</s>": what zenz emits after an output
+constexpr llama_token END = 3;
+constexpr int MAX_SEQ = 16;  // "</s>": what zenz emits after an output
 
 std::vector<llama_token> tokenize(const Zenz &z, const std::string &text) {
     std::vector<llama_token> out(text.size() + 8);
@@ -75,10 +76,11 @@ Java_dev_flickime_engine_Zenz_nativeLoad(JNIEnv *env, jclass, jstring path, jint
     env->ReleaseStringUTFChars(path, p);
     if (!model) { LOGE("model load failed"); return 0; }
     llama_context_params cp = llama_context_default_params();
-    cp.n_ctx = 512;
-    cp.n_batch = 512;
-    cp.n_ubatch = 512;
-    cp.n_seq_max = 1;
+    cp.n_ctx = 2048;
+    cp.n_batch = 1024;
+    cp.n_ubatch = 1024;
+    cp.n_seq_max = MAX_SEQ;
+    cp.kv_unified = true;  // candidates share the prompt
     cp.n_threads = threads;
     cp.n_threads_batch = threads;
     llama_context *ctx = llama_init_from_model(model, cp);
@@ -107,23 +109,63 @@ Java_dev_flickime_engine_Zenz_nativeScore(JNIEnv *env, jclass, jlong handle, jby
         llama_memory_clear(mem, true);
         if ((int) prompt.size() < 400 && decode(*z, prompt, 0, false)) {
             // distribution of the first output token, shared by all candidates
-            std::vector<float> first(llama_get_logits_ith(z->ctx, -1), llama_get_logits_ith(z->ctx, -1) + z->n_vocab);
+            const float *l0 = llama_get_logits_ith(z->ctx, -1);
+            std::vector<float> first(l0, l0 + z->n_vocab);
             const int np = (int) prompt.size();
+            std::vector<std::vector<llama_token>> cand((size_t) n);
             for (jsize i = 0; i < n; i++) {
                 auto *ja = (jbyteArray) env->GetObjectArrayElement(jcands, i);
-                auto c = tokenize(*z, bytes(env, ja));
+                cand[i] = tokenize(*z, bytes(env, ja));
                 env->DeleteLocalRef(ja);
-                c.push_back(END);
-                if (np + (int) c.size() >= 500) continue;
-                float nll = -logprob(first.data(), z->n_vocab, c[0]);
-                if (c.size() > 1) {
-                    llama_memory_seq_rm(mem, 0, np, -1);
-                    std::vector<llama_token> feed(c.begin(), c.end() - 1);
-                    if (!decode(*z, feed, np, true)) continue;
-                    for (size_t k = 0; k + 1 < c.size(); k++)
-                        nll -= logprob(llama_get_logits_ith(z->ctx, (int32_t) k), z->n_vocab, c[k + 1]);
+                cand[i].push_back(END);
+            }
+            // All candidates in ONE batch, as a prefix tree: a token shared by several candidates
+            // (same text so far) is computed once and belongs to all their sequences.
+            struct Node { llama_token tok; int pos; std::vector<int> seqs; int child_start; };
+            std::vector<Node> nodes;
+            std::vector<std::vector<int>> path((size_t) n);   // batch index of each fed token per candidate
+            std::vector<bool> usable((size_t) n, false);
+            for (jsize i = 0; i < n && i + 1 < MAX_SEQ; i++) {
+                const auto &c = cand[i];
+                if (np + (int) c.size() > 500) continue;
+                usable[i] = true;
+                int parent = -1;
+                for (size_t k = 0; k + 1 < c.size(); k++) {
+                    int found = -1;
+                    // children of `parent` are nodes created with that parent; search linearly (tiny)
+                    for (size_t q = 0; q < nodes.size(); q++)
+                        if (nodes[q].child_start == parent && nodes[q].tok == c[k] && nodes[q].pos == np + (int) k) { found = (int) q; break; }
+                    if (found < 0) {
+                        if (nodes.size() >= 1024) { usable[i] = false; break; }
+                        nodes.push_back({c[k], np + (int) k, {}, parent});
+                        found = (int) nodes.size() - 1;
+                    }
+                    nodes[found].seqs.push_back(i + 1);
+                    path[i].push_back(found);
+                    parent = found;
                 }
-                out[(size_t) i] = nll;
+            }
+            for (jsize i = 0; i < n && i + 1 < MAX_SEQ; i++) if (usable[i] && cand[i].size() > 1) llama_memory_seq_cp(mem, 0, i + 1, -1, -1);
+            llama_batch b = llama_batch_init(1024, 0, MAX_SEQ);
+            for (size_t q = 0; q < nodes.size(); q++) {
+                b.token[q] = nodes[q].tok;
+                b.pos[q] = nodes[q].pos;
+                b.n_seq_id[q] = (int32_t) nodes[q].seqs.size();
+                for (size_t t = 0; t < nodes[q].seqs.size(); t++) b.seq_id[q][t] = nodes[q].seqs[t];
+                b.logits[q] = true;
+            }
+            b.n_tokens = (int32_t) nodes.size();
+            bool ok = nodes.empty() || llama_decode(z->ctx, b) == 0;
+            llama_batch_free(b);
+            if (ok) {
+                for (jsize i = 0; i < n; i++) {
+                    if (!usable[i] || (cand[i].size() > 1 && path[i].size() + 1 != cand[i].size())) continue;
+                    const auto &c = cand[i];
+                    float nll = -logprob(first.data(), z->n_vocab, c[0]);
+                    for (size_t k = 0; k < path[i].size(); k++)
+                        nll -= logprob(llama_get_logits_ith(z->ctx, path[i][k]), z->n_vocab, c[k + 1]);
+                    out[(size_t) i] = nll;
+                }
             }
         }
     }
