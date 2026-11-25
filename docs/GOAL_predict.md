@@ -9,9 +9,10 @@
 
 ```
 cd <repo>
-EVAL_DIR=eval EVAL_SPLIT=dev EVAL_OUT=/tmp/dev.tsv ./gradlew -q testDebugUnitTest --tests '*PredictEvalTest*' --rerun -i | grep PREDEVAL
+EVAL_DIR=$PWD/eval EVAL_SPLIT=dev EVAL_OUT=/tmp/dev.tsv ./gradlew -q testDebugUnitTest --tests '*PredictEvalTest*' --rerun -i | grep PREDEVAL
 ```
 
+- `EVAL_DIR` は絶対パスで渡す（テストは `app/` で動くため）。
 - ログを時系列に再生し、毎回「採点 → 学習」を繰り返す（実機での学習も込みで測る）。前60%は学習だけ（warm）、次の20%が **dev（調整に使う）**、最後の20%が **test（最後に1回だけ報告）**。
 - 主指標は **ksr**（keystroke saving rate）。シミュレーションされたユーザーが1文字ずつ打ち、残りの読みと表記の両方の先頭に一致する予測が候補バー（先頭5個）に出たら、それをタップして続きを打つ。最後は変換候補をタップする。全部打って1タップした場合と比べて、何%減ったかを測る。
 - 補助指標: `saved` / `hit` / `first1`（確定した文字列そのものが予測に出たか）、`conv1`（読みを全部打った時の第1候補が正解か＝**変換精度の回帰チェック**）。
