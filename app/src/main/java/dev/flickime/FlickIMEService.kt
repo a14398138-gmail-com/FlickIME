@@ -875,7 +875,10 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         if (compReading != null) resetCompound()
         segLen = 0
         if (reading.isEmpty()) captureContext()
-        reading.append(text)
+        // typed where the cursor is inside the composition (the user tapped into it)
+        val at = caret
+        reading.insert(at, text)
+        cur = if (cur >= 0 && at + text.length < reading.length) at + text.length else -1
         refresh()
     }
 
@@ -905,7 +908,18 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         when (action) {
             Action.Backspace -> when {
                 selected >= 0 -> { selected = -1; showComposing(); renderCandidates() }
-                reading.isNotEmpty() -> { reading.deleteCharAt(reading.length - 1); resetCompound(); segLen = 0; refresh() }
+                reading.isNotEmpty() -> {
+                    val at = caret
+                    if (at == 0) {
+                        // cursor at the start of the composition: delete what is in front of it, keep the rest unconverted
+                        currentInputConnection?.deleteSurroundingText(1, 0)
+                    } else {
+                        reading.deleteCharAt(at - 1)
+                        if (cur >= 0) cur = at - 1
+                        if (reading.isEmpty()) cur = -1
+                        resetCompound(); segLen = 0; refresh()
+                    }
+                }
                 else -> { trackCorrection(); sendKey(KeyEvent.KEYCODE_DEL) }
             }
             Action.Space -> when {
@@ -936,8 +950,8 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
             }
             Action.Dakuten -> if (reading.isNotEmpty()) {
                 if (selected >= 0) { selected = -1 }
-                val last = reading.last()
-                Layouts.cycleDakuten(last)?.let { reading.setCharAt(reading.length - 1, it); resetCompound(); segLen = 0; refresh() }
+                val at = caret
+                if (at > 0) Layouts.cycleDakuten(reading[at - 1])?.let { reading.setCharAt(at - 1, it); resetCompound(); segLen = 0; refresh() }
             }
             Action.ToNumber -> {
                 if (reading.isNotEmpty()) { if (selected >= 0) commitCandidate(selected) else commitKana() }
@@ -981,6 +995,15 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         val movedAway = movedOutside || reading.isNotEmpty() && candidatesStart < 0 &&
             (newSelStart != oldSelStart || newSelEnd != oldSelEnd) && cursorLeftComposition()
         if (reading.isNotEmpty() && movedAway) dropComposition()
+        else if (reading.isNotEmpty() && candidatesStart >= 0) {
+            composeStart = candidatesStart
+            // the user tapped inside the unconverted composition: keep composing, move our cursor there
+            if (newSelStart == newSelEnd && plainComposing && candidatesEnd - candidatesStart == reading.length) {
+                val p = newSelStart - candidatesStart
+                cur = if (p >= reading.length) -1 else p
+                shownCaret = caret
+            }
+        }
         if (reading.isEmpty() && (newSelStart != oldSelStart || newSelEnd != oldSelEnd) && candidatesStart < 0) {
             // a jump that is not explained by our own typing breaks word tracking
             val typedJump = newSelStart == newSelEnd && newSelStart - oldSelEnd in 0..(if (glideMode) glideCommitted.length else 1)
@@ -988,15 +1011,27 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         }
     }
 
-    /** What [showComposing] last put in the editor. */
+    /** What [showComposing] last put in the editor, and where the cursor is inside it. */
     private var shownComposing = ""
+    private var shownCaret = 0
+
+    /** Cursor inside the (unconverted) composition, or -1 = at its end. */
+    private var cur = -1
+    private val caret get() = if (cur in 0 until reading.length) cur else reading.length
+    /** Where the composing region starts in the editor (from onUpdateSelection). */
+    private var composeStart = -1
+    private val plainComposing get() = selected < 0 && segLen !in 1 until reading.length
 
     private fun cursorLeftComposition(): Boolean {
         if (reading.isEmpty() || shownComposing.isEmpty()) return false
         val ic = currentInputConnection ?: return false
         if (!ic.getSelectedText(0).isNullOrEmpty()) return true
-        val before = ic.getTextBeforeCursor(shownComposing.length, 0)?.toString() ?: return false
-        return before != shownComposing
+        val c = shownCaret.coerceIn(0, shownComposing.length)
+        val before = ic.getTextBeforeCursor(c, 0)?.toString() ?: return false
+        if (before != shownComposing.substring(0, c)) return true
+        if (c == shownComposing.length) return false
+        val after = ic.getTextAfterCursor(shownComposing.length - c, 0)?.toString() ?: return false
+        return after != shownComposing.substring(c)
     }
 
     /** Leaves the kana where it is and forgets the composition. */
@@ -1004,7 +1039,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         currentInputConnection?.finishComposingText()
         seq++
         reading.setLength(0); candidates = emptyList(); selected = -1; segLen = 0
-        shownComposing = ""
+        shownComposing = ""; cur = -1
         resetCompound(); compWords.clear()
         if (::keyboard.isInitialized) keyboard.composing = false
         if (::candRow.isInitialized) renderCandidates()
@@ -1020,6 +1055,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
 
     private fun resetComposition() {
         reading.setLength(0); candidates = emptyList(); selected = -1; seq++
+        cur = -1
         resetCompound(); segLen = 0
         compWords.clear()
         if (::keyboard.isInitialized) keyboard.composing = false
@@ -1040,7 +1076,16 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
             }
         } else reading.toString()
         shownComposing = text.toString()
-        ic.setComposingText(text, 1)
+        if (plainComposing && cur in 0 until reading.length && composeStart >= 0) {
+            shownCaret = cur
+            ic.beginBatchEdit()
+            ic.setComposingText(text, 1)
+            ic.setSelection(composeStart + cur, composeStart + cur)
+            ic.endBatchEdit()
+        } else {
+            shownCaret = shownComposing.length
+            ic.setComposingText(text, 1)
+        }
     }
 
     /** Shrink / extend the first segment, like Gboard's ◀▶ during conversion. */
@@ -1135,6 +1180,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         }
 
         reading.delete(0, c.consumed)
+        cur = -1
         selected = -1
         segLen = 0
         if (reading.isNotEmpty()) captureContext()
