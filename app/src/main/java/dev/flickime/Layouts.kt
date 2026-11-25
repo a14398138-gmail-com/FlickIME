@@ -95,6 +95,9 @@ object Layouts {
         '1' to listOf("¹", "₁"), '2' to listOf("²", "₂"), '3' to listOf("³", "₃"), '4' to listOf("⁴", "₄"),
         '5' to listOf("⁵", "₅"), '6' to listOf("⁶", "₆"), '7' to listOf("⁷", "₇"), '8' to listOf("⁸", "₈"),
         '9' to listOf("⁹", "₉"), '0' to listOf("⁰", "₀"),
+        // symbol keys (Gboard-style math / dash variants)
+        '=' to listOf("≠", "≈", "∞", "±"), '-' to listOf("–", "—", "_", "·"), '/' to listOf("÷", "\\"),
+        '[' to listOf("「", "【", "〈"), ']' to listOf("」", "】", "〉"),
         // period (LatinIME morekeys_punctuation)
         '.' to listOf(",", "?", "!", "#", ")", "(", "/", ";", "'", "@", ":", "-", "\"", "+", "%", "&"),
     )
