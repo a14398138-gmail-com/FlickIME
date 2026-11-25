@@ -108,7 +108,7 @@ object Layouts {
                 keys.add(KeyDef(start + i * u, u, r, ch.toString(), shifted = shifted[i].toString(), longPress = LONG_PRESS[ch]))
             }
         }
-        row(0, 0f, "@1234567890-=", "`!~#$%^&*()_+")
+        row(0, 0f, "`1234567890-=", "~!@#$%^&*()_+")
         row(1, 0f, "qwertyuiop[]\\", "QWERTYUIOP{}|")
         row(2, 0.5f * u, "asdfghjkl;'", "ASDFGHJKL:\"")
         keys.add(KeyDef(11.5f * u, 1.5f * u, 2, "⌫", Action.Backspace, accent = true))

@@ -177,3 +177,16 @@ fun atomicWrite(target: File, bytes: ByteArray) {
     java.io.FileOutputStream(tmp).use { o -> o.write(bytes); o.fd.sync() }
     if (!tmp.renameTo(target)) { target.delete(); check(tmp.renameTo(target)) { "rename failed" } }
 }
+
+/** The user's registered phrases (定型文), encrypted. */
+object SnippetStore {
+    private fun f(c: Context) = File(c.filesDir, "snippets.bin")
+    fun load(c: Context): List<String> = runCatching {
+        val arr = org.json.JSONArray(String(Crypto.decrypt(f(c).readBytes())))
+        List(arr.length()) { arr.getString(it) }
+    }.getOrElse { emptyList() }
+    fun save(c: Context, items: List<String>) {
+        val arr = org.json.JSONArray(); items.forEach { arr.put(it) }
+        runCatching { atomicWrite(f(c), Crypto.encrypt(arr.toString().toByteArray())) }
+    }
+}

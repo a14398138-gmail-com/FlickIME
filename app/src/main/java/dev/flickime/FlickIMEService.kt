@@ -291,6 +291,10 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     private var recentClipShownUntil = 0L
     private lateinit var clipButton: TextView
     private lateinit var floatButton: TextView
+    private lateinit var snippetButton: TextView
+    private lateinit var snippetPanel: ScrollView
+    private lateinit var snippetList: LinearLayout
+    private var snippetOpen = false
     private lateinit var clipChip: TextView
     private lateinit var clipPanel: ScrollView
     private lateinit var clipList: LinearLayout
@@ -322,7 +326,11 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     private fun showEmoji(on: Boolean) {
         emojiOpen = on
         if (on) fitToKeyboard(emojiPanel)
-        if (on) { expand(false); if (clipOpen) showClips(false); emojiPanel.show() }
+        if (on) {
+            expand(false); if (clipOpen) showClips(false)
+            if (snippetOpen) { snippetOpen = false; snippetPanel.visibility = View.GONE; snippetButton.text = "📝" }
+            emojiPanel.show()
+        }
         emojiPanel.visibility = if (on) View.VISIBLE else View.GONE
         keyboard.visibility = if (on || expanded || clipOpen) View.INVISIBLE else View.VISIBLE
     }
@@ -349,6 +357,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         val idle = candidates.isEmpty() && reading.isEmpty()
         clipButton.visibility = if (idle) View.VISIBLE else View.GONE
         floatButton.visibility = if (idle) View.VISIBLE else View.GONE
+        snippetButton.visibility = if (idle) View.VISIBLE else View.GONE
         val recent = clips.firstOrNull()
         val showChip = idle && recent != null && System.currentTimeMillis() < recentClipShownUntil
         clipChip.visibility = if (showChip) View.VISIBLE else View.GONE
@@ -363,8 +372,49 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         updateBarButtons()
     }
 
+    private fun showSnippets(on: Boolean) {
+        snippetOpen = on
+        if (on) {
+            fitToKeyboard(snippetPanel)
+            expand(false)
+            if (clipOpen) showClips(false)
+            if (::emojiPanel.isInitialized && emojiOpen) { emojiOpen = false; emojiPanel.visibility = View.GONE }
+            renderSnippets(SnippetStore.load(this))
+        }
+        snippetPanel.visibility = if (on) View.VISIBLE else View.GONE
+        keyboard.visibility = if (on || expanded || clipOpen) View.INVISIBLE else View.VISIBLE
+        snippetButton.text = if (on) "⌨" else "📝"
+    }
+
+    private fun renderSnippets(items: List<String>) {
+        snippetList.removeAllViews()
+        val pad = (12 * dp).toInt()
+        if (items.isEmpty()) {
+            snippetList.addView(TextView(this).apply {
+                text = "定型文はまだありません。設定画面の「定型文」から登録できます。"; setTextColor(fgColor()); setPadding(pad, pad, pad, pad)
+            })
+            return
+        }
+        for (item in items) {
+            snippetList.addView(TextView(this).apply {
+                text = item; maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f); setTextColor(fgColor())
+                setPadding(pad, pad, pad, pad)
+                setBackgroundColor(Color.argb(if (night) 40 else 120, 255, 255, 255))
+                setOnClickListener {
+                    if (reading.isNotEmpty()) commitKana()
+                    currentInputConnection?.commitText(item, 1)
+                    showSnippets(false)
+                }
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                setMargins((6 * dp).toInt(), (3 * dp).toInt(), (6 * dp).toInt(), (3 * dp).toInt())
+            })
+        }
+    }
+
     private fun showClips(on: Boolean) {
         clipOpen = on
+        if (on && ::snippetPanel.isInitialized && snippetOpen) { snippetOpen = false; snippetPanel.visibility = View.GONE; snippetButton.text = "📝" }
         if (on) fitToKeyboard(clipPanel)
         if (on) { expand(false); if (::emojiPanel.isInitialized && emojiOpen) { emojiOpen = false; emojiPanel.visibility = View.GONE } }
         clipPanel.visibility = if (on) View.VISIBLE else View.GONE
@@ -575,6 +625,13 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
             setOnClickListener { setFloating(!floating) }
         }
         bar.addView(floatButton, LinearLayout.LayoutParams((44 * dp).toInt(), LinearLayout.LayoutParams.MATCH_PARENT))
+        snippetButton = TextView(this).apply {
+            text = "📝"; gravity = Gravity.CENTER
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+            contentDescription = "定型文"
+            setOnClickListener { showSnippets(!snippetOpen) }
+        }
+        bar.addView(snippetButton, LinearLayout.LayoutParams((44 * dp).toInt(), LinearLayout.LayoutParams.MATCH_PARENT))
         clipChip = TextView(this).apply {
             gravity = Gravity.CENTER_VERTICAL; isSingleLine = true
             ellipsize = android.text.TextUtils.TruncateAt.END
@@ -618,6 +675,10 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         clipPanel = ScrollView(this).apply { addView(clipList); visibility = View.GONE }
         body.addView(clipPanel, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, (4 * 58 * dp).toInt()))
         clipOpen = false
+        snippetList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, (4 * dp).toInt(), 0, (4 * dp).toInt()) }
+        snippetPanel = ScrollView(this).apply { addView(snippetList); visibility = View.GONE }
+        body.addView(snippetPanel, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, (4 * 58 * dp).toInt()))
+        snippetOpen = false
         emojiPanel = EmojiPanel(this, theme, emojiCategories,
             onPick = { e -> currentInputConnection?.commitText(e, 1) },
             onBack = { showEmoji(false) },
@@ -685,6 +746,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         resetComposition()
         if (::clipPanel.isInitialized && clipOpen) showClips(false)
         if (::emojiPanel.isInitialized && emojiOpen) showEmoji(false)
+        if (::snippetPanel.isInitialized && snippetOpen) showSnippets(false)
         if (::keyboard.isInitialized) keyboard.flickThresholdDp = Prefs.flickThresholdDp(this).toFloat()
         if (clipGeneration != ClipStore.generation) { clipGeneration = ClipStore.generation; clips.clear(); recentClipShownUntil = 0 }
         val cls = info.inputType and InputType.TYPE_MASK_CLASS

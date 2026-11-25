@@ -20,6 +20,12 @@ class UserDictionary {
     @Synchronized fun lookup(reading: String): List<Word> = byReading[reading]?.toList().orEmpty()
     @Synchronized fun isEmpty() = byReading.isEmpty()
 
+    /** Words whose reading or surface contains [query] (for the settings screen). */
+    @Synchronized fun search(query: String, limit: Int): List<Word> {
+        val q = Kana.toHiragana(query.trim())
+        return byReading.values.flatten().filter { q.isEmpty() || q in it.reading || query.trim() in it.surface }.take(limit)
+    }
+
     /** Imported words whose reading starts with [prefix] (and is longer). */
     @Synchronized fun completions(prefix: String): List<Pair<String, String>> =
         byReading.entries.filter { it.key.length > prefix.length && it.key.startsWith(prefix) }

@@ -115,6 +115,42 @@ class SettingsActivity : Activity() {
         col.addView(text("Gboardの書き出し（zip / dictionary.txt）、Google日本語入力・Mozcの書き出し、MS-IMEのtxt、「読み<TAB>単語」のテキストを読み込めます。", 13f))
         dictInfo = text("")
         col.addView(dictInfo)
+        // manual registration
+        val readingIn = EditText(this).apply { hint = "読み（ひらがな）"; isSingleLine = true }
+        val wordIn = EditText(this).apply { hint = "単語"; isSingleLine = true }
+        col.addView(readingIn); col.addView(wordIn)
+        val found = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val searchIn = EditText(this).apply { hint = "登録語を検索（読み・単語）"; isSingleLine = true }
+        fun showFound() {
+            found.removeAllViews()
+            for (w in userDict().search(searchIn.text.toString(), 50)) {
+                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL }
+                row.addView(text("${w.surface}（${w.reading}）"), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                row.addView(button("削除") {
+                    userDict().remove(w.reading, w.surface); saveDict(); showFound(); refresh()
+                })
+                found.addView(row)
+            }
+        }
+        col.addView(button("辞書に登録") {
+            val r = dev.flickime.engine.Kana.toHiragana(readingIn.text.toString().trim())
+            val w = wordIn.text.toString().trim()
+            when {
+                r.isEmpty() || w.isEmpty() -> toast("読みと単語を入力してください")
+                !r.all { it in 'ぁ'..'ゖ' || it == 'ー' || it.isLetterOrDigit() } -> toast("読みはひらがなで入力してください")
+                userDict().add(r, w) -> { saveDict(); readingIn.setText(""); wordIn.setText(""); toast("「$w」を登録しました"); refresh(); showFound() }
+                else -> toast("すでに登録されています")
+            }
+        })
+        col.addView(searchIn)
+        searchIn.addTextChangedListener(object : android.text.TextWatcher {
+            override fun afterTextChanged(e: android.text.Editable?) = showFound()
+            override fun beforeTextChanged(a: CharSequence?, b: Int, c: Int, d: Int) {}
+            override fun onTextChanged(a: CharSequence?, b: Int, c: Int, d: Int) {}
+        })
+        col.addView(found)
+        showFound()
+
         col.addView(button("辞書をインポート") {
             startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE); type = "*/*"
@@ -130,6 +166,29 @@ class SettingsActivity : Activity() {
         col.addView(button("登録した英単語を削除") {
             confirm("自動登録した英単語をすべて削除しますか？（再起動後に反映）") { UserWordsStore.clear(this); refresh() }
         })
+
+        col.addView(text("定型文", 20f))
+        col.addView(text("キーボードの候補バーの📝から入力できます。", 13f))
+        val snippetIn = EditText(this).apply { hint = "定型文（改行も可）" }
+        col.addView(snippetIn)
+        val snippetRows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        fun showSnippets() {
+            snippetRows.removeAllViews()
+            val items = SnippetStore.load(this)
+            items.forEachIndexed { i, t ->
+                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL }
+                row.addView(text(t), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                row.addView(button("削除") { SnippetStore.save(this, items.filterIndexed { j, _ -> j != i }); showSnippets() })
+                snippetRows.addView(row)
+            }
+        }
+        col.addView(button("定型文を追加") {
+            val t = snippetIn.text.toString()
+            if (t.isBlank()) toast("定型文を入力してください")
+            else { SnippetStore.save(this, SnippetStore.load(this) + t); snippetIn.setText(""); showSnippets() }
+        })
+        col.addView(snippetRows)
+        showSnippets()
 
         col.addView(text("クリップボード", 20f))
         col.addView(text("コピーしたテキストは、候補バー左の📋から呼び出せます（最大30件＋固定したもの、端末内に暗号化して保存）。パスワード管理アプリなどが「機密」としてコピーしたものは保存しません。", 13f))
@@ -199,6 +258,11 @@ class SettingsActivity : Activity() {
                 refresh()
             }
         }.start()
+    }
+
+    private fun saveDict() {
+        val text = userDict().serialize()
+        Thread { UserDictStore.save(this, text) }.start()
     }
 
     private fun confirm(msg: String, ok: () -> Unit) {
