@@ -736,6 +736,25 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         isSingleLine = true
         if (highlight) setBackgroundColor(theme.selectedBg)
         setOnClickListener { expand(false); commitCandidate(i) }
+        setOnLongClickListener { forgetCandidate(c); true }
+    }
+
+    /** Long-press: remove a learned word / prediction (Gboard's "候補から削除"). */
+    private fun forgetCandidate(c: Candidate) {
+        val conv = Engine.converter ?: return
+        if (glideMode) return
+        val r = c.fullReading ?: reading.substring(0, c.consumed.coerceAtMost(reading.length))
+        val fromHistory = conv.history.forget(r, c.surface)
+        val fromDict = conv.userDict.remove(r, c.surface)
+        if (!fromHistory && !fromDict) {
+            android.widget.Toast.makeText(this, "学習した候補ではありません", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        historyDirty = true
+        saveHistory()
+        if (fromDict) { val text = conv.userDict.serialize(); io.execute { UserDictStore.save(applicationContext, text) } }
+        android.widget.Toast.makeText(this, "「${c.surface}」を候補から削除しました", android.widget.Toast.LENGTH_SHORT).show()
+        refresh()
     }
 
     private fun renderPanel() {

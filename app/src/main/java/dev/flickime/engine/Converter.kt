@@ -92,6 +92,16 @@ class UserHistory {
 
     @Synchronized fun clear() { pos.clear(); neg.clear(); pairs.clear(); readings.clear(); byReading.clear(); version++ }
 
+    /** Drops everything learned for this word (long-press → delete on a candidate). */
+    @Synchronized fun forget(reading: String, surface: String): Boolean {
+        val k = key(reading, surface)
+        val had = pos.remove(k) != null
+        byReading[reading]?.let { it.remove(surface); if (it.isEmpty()) byReading.remove(reading) }
+        pairs.keys.removeAll { it.startsWith("$surface\t") || it.endsWith("\t$surface") }
+        version++
+        return had
+    }
+
     /**
      * Things the user committed whose reading starts with [prefix] (and is longer):
      * (reading, surface, score), most used first. Only deliberate picks count (weight >= 2).
@@ -102,7 +112,10 @@ class UserHistory {
         for ((r, surfaces) in byReading.subMap(prefix, true, prefix + '\uffff', false)) {
             if (r.length <= prefix.length) continue
             for (sf in surfaces) {
-                if ((pos[key(r, sf)] ?: 0) < 2) continue
+                // a bare kana commit (ぎんがが) is not a word worth suggesting
+                if (sf == r) continue
+                // from a single character, only things picked more than once
+                if ((pos[key(r, sf)] ?: 0) < (if (prefix.length == 1) 4 else 2)) continue
                 val sc = score(r, sf)
                 if (sc > 0) out.add(Triple(r, sf, sc))
             }

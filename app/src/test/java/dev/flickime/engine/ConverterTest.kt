@@ -134,6 +134,10 @@ class ConverterTest {
         assertTrue(conv.predictions("ありが").any { it.fullReading!!.startsWith("ありがと") })
         // own phrases complete from the first character, ahead of dictionary words
         conv.history.learn("よろしくおねがいします", "よろしくお願いします")
+        // picked once: from the second character; picked twice: from the first
+        assertTrue(conv.predictions("よ").none { it.surface == "よろしくお願いします" })
+        assertEquals("よろしくお願いします", conv.predictions("よろ").first().surface)
+        conv.history.learn("よろしくおねがいします", "よろしくお願いします")
         assertEquals("よろしくお願いします", conv.predictions("よ").first().surface)
         assertEquals(Candidate.Kind.PREDICTION, conv.candidates("よろ")[1].kind)
         conv.history.clear()
