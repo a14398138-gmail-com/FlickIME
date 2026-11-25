@@ -941,8 +941,18 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
                     else sendKey(KeyEvent.KEYCODE_ENTER)
                 }
             }
-            Action.Left -> if (reading.isEmpty()) sendKey(KeyEvent.KEYCODE_DPAD_LEFT) else moveBoundary(-1)
-            Action.Right -> if (reading.isEmpty()) sendKey(KeyEvent.KEYCODE_DPAD_RIGHT) else moveBoundary(+1)
+            // like Gboard: before converting, ◀▶ move the cursor inside the composition;
+            // once converting (space pressed / boundary being set), they move the segment boundary
+            Action.Left -> when {
+                reading.isEmpty() -> sendKey(KeyEvent.KEYCODE_DPAD_LEFT)
+                selected >= 0 || segLen > 0 -> moveBoundary(-1)
+                else -> moveCaret(-1)
+            }
+            Action.Right -> when {
+                reading.isEmpty() -> sendKey(KeyEvent.KEYCODE_DPAD_RIGHT)
+                selected >= 0 || segLen > 0 -> moveBoundary(+1)
+                else -> moveCaret(+1)
+            }
             Action.Mode -> {
                 if (reading.isNotEmpty()) { if (selected >= 0) commitCandidate(selected) else commitKana() }
                 mode = if (mode == Mode.KANA) Mode.ALPHA else Mode.KANA
@@ -1039,7 +1049,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         currentInputConnection?.finishComposingText()
         seq++
         reading.setLength(0); candidates = emptyList(); selected = -1; segLen = 0
-        shownComposing = ""; cur = -1
+        shownComposing = ""; cur = -1; composeStart = -1
         resetCompound(); compWords.clear()
         if (::keyboard.isInitialized) keyboard.composing = false
         if (::candRow.isInitialized) renderCandidates()
@@ -1055,7 +1065,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
 
     private fun resetComposition() {
         reading.setLength(0); candidates = emptyList(); selected = -1; seq++
-        cur = -1
+        cur = -1; composeStart = -1
         resetCompound(); segLen = 0
         compWords.clear()
         if (::keyboard.isInitialized) keyboard.composing = false
@@ -1076,6 +1086,13 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
             }
         } else reading.toString()
         shownComposing = text.toString()
+        if (plainComposing && cur in 0 until reading.length && composeStart < 0) {
+            // not reported by the editor yet: work it out from the cursor after placing the text at the end
+            ic.setComposingText(text, 1)
+            ic.getExtractedText(android.view.inputmethod.ExtractedTextRequest(), 0)?.let {
+                if (it.selectionStart >= 0) composeStart = it.startOffset + it.selectionStart - text.length
+            }
+        }
         if (plainComposing && cur in 0 until reading.length && composeStart >= 0) {
             shownCaret = cur
             ic.beginBatchEdit()
@@ -1086,6 +1103,13 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
             shownCaret = shownComposing.length
             ic.setComposingText(text, 1)
         }
+    }
+
+    private fun moveCaret(delta: Int) {
+        val next = (caret + delta).coerceIn(0, reading.length)
+        if (next == caret) return
+        cur = if (next >= reading.length) -1 else next
+        showComposing()
     }
 
     /** Shrink / extend the first segment, like Gboard's ◀▶ during conversion. */
@@ -1180,7 +1204,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         }
 
         reading.delete(0, c.consumed)
-        cur = -1
+        cur = -1; composeStart = -1
         selected = -1
         segLen = 0
         if (reading.isNotEmpty()) captureContext()
