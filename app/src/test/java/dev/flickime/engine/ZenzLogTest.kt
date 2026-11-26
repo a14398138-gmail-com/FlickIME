@@ -13,6 +13,8 @@ class ZenzLogTest {
         val conv = f.invoke(ConverterTest()) as Converter
         conv.zenz = Zenz.load(model!!, 2)
         conv.zenzGenerate = System.getenv("ZENZ_GEN") == "1"
+        System.getenv("NBEST_A")?.let { conv.nbestSearch = it.toInt() }
+        System.getenv("NBEST_K")?.let { conv.nbestKeep = it.toInt() }
         fun unesc(s: String) = s.replace("\\n", "\n").replace("\\t", "\t")
         var n = 0; var ok = 0; var okNoCtx = 0; var base = 0
         for (line in File(dir, "events.tsv").readLines()) {

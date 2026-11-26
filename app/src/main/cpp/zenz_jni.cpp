@@ -1,4 +1,6 @@
 // JNI bridge: scores conversion candidates with the zenz model through llama.cpp.
+#include <cstdlib>
+#include <algorithm>
 #include <jni.h>
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -19,6 +21,9 @@ struct Zenz {
     llama_context *ctx = nullptr;
     const llama_vocab *vocab = nullptr;
     int n_vocab = 0;
+    // KV reuse: tokens of the last prompt kept in sequence 0, and the distribution after it
+    std::vector<llama_token> cached;
+    std::vector<float> first;
 };
 
 constexpr llama_token END = 3;
@@ -65,6 +70,35 @@ bool decode(Zenz &z, const std::vector<llama_token> &toks, int pos0, bool all_lo
     llama_batch_free(b);
     return rc == 0;
 }
+/**
+ * Puts [prompt] in sequence 0 reusing what the cache already holds: consecutive keystrokes share the
+ * context and the start of the reading, and generate() + score() for one conversion share the whole
+ * prompt. Afterwards z.first is the distribution of the first output token. Other sequences are cleared.
+ */
+bool prefill(Zenz &z, const std::vector<llama_token> &prompt) {
+    llama_memory_t mem = llama_get_memory(z.ctx);
+    const int np = (int) prompt.size();
+    if (np == 0) return false;
+    for (int s = 1; s < MAX_SEQ; s++) llama_memory_seq_rm(mem, s, -1, -1);
+    size_t lcp = 0;
+    while (lcp < z.cached.size() && lcp < prompt.size() && z.cached[lcp] == prompt[lcp]) lcp++;
+    if (getenv("ZENZ_NOREUSE")) { lcp = 0; z.first.clear(); }
+    if ((int) lcp == np && (int) z.cached.size() == np && !z.first.empty()) {
+        llama_memory_seq_rm(mem, 0, np, -1);  // drop what generate() appended
+        return true;
+    }
+    int keep = std::min((int) lcp, np - 1);    // re-decode at least one token to get its logits
+    llama_memory_seq_rm(mem, 0, keep, -1);
+    std::vector<llama_token> rest(prompt.begin() + keep, prompt.end());
+    if (!decode(z, rest, keep, false)) {
+        llama_memory_clear(mem, true); z.cached.clear(); z.first.clear();
+        return false;
+    }
+    const float *l = llama_get_logits_ith(z.ctx, -1);
+    z.first.assign(l, l + z.n_vocab);
+    z.cached = prompt;
+    return true;
+}
 }  // namespace
 
 extern "C" JNIEXPORT jlong JNICALL
@@ -106,11 +140,9 @@ Java_dev_flickime_engine_Zenz_nativeScore(JNIEnv *env, jclass, jlong handle, jby
         // no BOS: the model's metadata disables it, and azooKey's llama_tokenize call adds none either
         auto prompt = tokenize(*z, bytes(env, jprompt));
         llama_memory_t mem = llama_get_memory(z->ctx);
-        llama_memory_clear(mem, true);
-        if ((int) prompt.size() < 400 && decode(*z, prompt, 0, false)) {
+        if ((int) prompt.size() < 400 && prefill(*z, prompt)) {
             // distribution of the first output token, shared by all candidates
-            const float *l0 = llama_get_logits_ith(z->ctx, -1);
-            std::vector<float> first(l0, l0 + z->n_vocab);
+            std::vector<float> first = z->first;
             const int np = (int) prompt.size();
             std::vector<std::vector<llama_token>> cand((size_t) n);
             for (jsize i = 0; i < n; i++) {
@@ -181,11 +213,10 @@ Java_dev_flickime_engine_Zenz_nativeGenerate(JNIEnv *env, jclass, jlong handle, 
     std::string text;
     if (z) {
         auto prompt = tokenize(*z, bytes(env, jprompt));
-        llama_memory_clear(llama_get_memory(z->ctx), true);
         int pos = (int) prompt.size();
-        if (pos < 400 && decode(*z, prompt, 0, false)) {
+        if (pos < 400 && prefill(*z, prompt)) {
             for (int step = 0; step < maxTokens && pos < 1000; step++) {
-                const float *l = llama_get_logits_ith(z->ctx, -1);
+                const float *l = step == 0 ? z->first.data() : llama_get_logits_ith(z->ctx, -1);
                 llama_token best = 0;
                 for (int i = 1; i < z->n_vocab; i++) if (l[i] > l[best]) best = i;
                 if (best == END || llama_vocab_is_eog(z->vocab, best)) break;

@@ -26,6 +26,8 @@ class AjimeeTest {
         val f = ConverterTest::class.java.getDeclaredMethod("getConv").apply { isAccessible = true }
         val conv = f.invoke(ConverterTest()) as Converter
         conv.history.clear()
+        System.getenv("NBEST_A")?.let { conv.nbestSearch = it.toInt() }
+        System.getenv("NBEST_K")?.let { conv.nbestKeep = it.toInt() }
         val lib = System.getenv("ZENZ_LIB"); val model = System.getenv("ZENZ_MODEL")
         if (lib != null && model != null) {
             System.load(lib)

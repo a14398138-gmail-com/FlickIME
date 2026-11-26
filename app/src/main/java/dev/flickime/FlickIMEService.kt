@@ -423,7 +423,8 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         if (Build.VERSION.SDK_INT >= 24 &&
             clip.description?.extras?.getBoolean("android.content.extra.IS_SENSITIVE") == true) return
         val text = (0 until clip.itemCount).joinToString("\n") { clip.getItemAt(it).coerceToText(this).toString() }.trim()
-        if (text.isEmpty() || text.length > 5000) return
+        // long copies are kept too (up to ~100k characters; the panel shows only the start)
+        if (text.isEmpty() || text.length > 100_000) return
         if (clipGeneration != ClipStore.generation) { clipGeneration = ClipStore.generation; clips.clear() }
         ClipStore.add(clips, text)
         recentClipShownUntil = System.currentTimeMillis() + 60_000
@@ -524,7 +525,8 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
                 setBackgroundColor(Color.argb(if (night) 40 else 120, 255, 255, 255))
             }
             val tv = TextView(this).apply {
-                text = item.text; maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
+                text = if (item.text.length > 300) item.text.take(300) + "…（${item.text.length}文字）" else item.text
+                maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f); setTextColor(fgColor())
                 setPadding(pad, pad, pad, pad)
                 setOnClickListener { pasteClip(item.text) }

@@ -377,6 +377,10 @@ class Converter(
 
     /** Neural re-ranker (optional). */
     @Volatile var zenz: Zenz? = null
+    /** Paths taken from the lattice, and how many of them (best by the LM) are kept for zenz. */
+    var nbestSearch = NBEST
+    var nbestKeep = NBEST
+
     /** Add zenz's greedy generation to the candidates it scores (tuning knobs). */
     var zenzGenerate = false
     var zenzGenPenalty = 0
@@ -471,16 +475,19 @@ class Converter(
     }
 
     private fun ngramSentences(reading: String): List<Sentence> {
-        cache[reading]?.let { return it }
+        val key = reading
+        cache[key]?.let { return it }
         val lat = build(reading)
         val result = if (lm == null) {
             listOf(Sentence(toSegments(viterbi(lat)), 0))
         } else {
-            nBest(lat, NBEST)
+            // a wider A* search, narrowed by the trigram LM to what zenz gets to score
+            nBest(lat, nbestSearch)
                 .map { (nodes, cost) -> Sentence(toSegments(nodes), cost + lmScore(nodes, reading)) }
                 .sortedBy { it.score }
+                .take(nbestKeep)
         }.ifEmpty { listOf(Sentence(listOf(reading.length to reading), 0)) }
-        cache[reading] = result
+        cache[key] = result
         return result
     }
 
