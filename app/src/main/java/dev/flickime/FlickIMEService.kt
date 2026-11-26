@@ -682,6 +682,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         themeKey = Prefs.themeKey(this)
         barViews.clear()
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        inputRoot = root
         val bgImage = if (theme.glass) BackgroundImage.load(this) else null
         if (bgImage != null) {
             root.background = opaque(GlassBackdrop(night, translucent = false, image = bgImage, params = theme.params))
@@ -782,16 +783,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         root.addView(body)
         // Android 15 draws the IME edge-to-edge: keep keys above the navigation bar
         // (the strip with the system ∨ / 🌐 buttons), the way Gboard does.
-        if (!floating) root.setOnApplyWindowInsetsListener { v, insets ->
-            val bottom = if (Build.VERSION.SDK_INT >= 30) {
-                maxOf(
-                    insets.getInsets(android.view.WindowInsets.Type.navigationBars()).bottom,
-                    insets.getInsets(android.view.WindowInsets.Type.tappableElement()).bottom,
-                )
-            } else @Suppress("DEPRECATION") insets.systemWindowInsetBottom
-            v.setPadding(0, 0, 0, bottom)
-            insets
-        }
+        root.setOnApplyWindowInsetsListener { _, insets -> applyNavInset(insets); insets }
         root.requestApplyInsets()
         applyMode()
         return root
@@ -847,6 +839,31 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     private fun renderPanel() {
         flow.removeAllViews()
         candidates.forEachIndexed { i, c -> flow.addView(candidateView(i, c, i == selected)) }
+    }
+
+    private var inputRoot: View? = null
+    /** Last non-zero navigation bar height: some show-ups report 0 insets for a moment (the keyboard then sat a row too low). */
+    private var navInset = 0
+
+    private fun applyNavInset(insets: android.view.WindowInsets?) {
+        val v = inputRoot ?: return
+        val bottom = when {
+            insets == null -> 0
+            Build.VERSION.SDK_INT >= 30 -> maxOf(
+                insets.getInsets(android.view.WindowInsets.Type.navigationBars()).bottom,
+                insets.getInsets(android.view.WindowInsets.Type.tappableElement()).bottom,
+            )
+            else -> @Suppress("DEPRECATION") insets.systemWindowInsetBottom
+        }
+        if (bottom > 0) navInset = bottom
+        val pad = if (floating) 0 else if (bottom > 0) bottom else navInset
+        if (v.paddingBottom != pad) v.setPadding(0, 0, 0, pad)
+    }
+
+    override fun onWindowShown() {
+        super.onWindowShown()
+        // insets can arrive late or not at all for a re-shown window: apply what the window has now
+        inputRoot?.let { r -> r.post { applyNavInset(r.rootWindowInsets); r.requestApplyInsets() } }
     }
 
     override fun onStartInputView(info: EditorInfo, restarting: Boolean) {
