@@ -72,7 +72,8 @@ for fn, base_cost, take in PLAN:
             '地' if pos[2] == '地名' else '他'
         if kind not in take: continue
         if not re.fullmatch(r'[ぁ-ゖー]{1,32}', r) or not s or len(s) > 20: continue
-        if re.search(r'[Ａ-Ｚａ-ｚ０-９]', s) or (r, s) in existing or s == r: continue   # kana-only spellings add nothing
+        # kana-only spellings add nothing; Latin spellings come from en.tsv / NEologd instead
+        if re.search(r'[Ａ-Ｚａ-ｚ０-９A-Za-z]', s) or (r, s) in existing or s == r: continue
         mp = mozc_pos(pos, row[12])
         pid = ids.get(mp) if mp else None
         if pid is None: skipped += 1; continue
