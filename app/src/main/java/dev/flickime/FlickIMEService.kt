@@ -1015,7 +1015,14 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
                     val at = caret
                     if (at == 0) {
                         // cursor at the start of the composition: delete what is in front of it, keep the rest unconverted
-                        currentInputConnection?.deleteSurroundingText(1, 0)
+                        currentInputConnection?.let { ic ->
+                            val before = ic.getTextBeforeCursor(2, 0)?.toString().orEmpty()
+                            if (before.isNotEmpty()) {
+                                val w = if (before.length == 2 && Character.isSurrogatePair(before[0], before[1])) 2 else 1
+                                ic.deleteSurroundingText(w, 0)
+                                if (composeStart >= w) composeStart -= w   // the composition moved left with it
+                            }
+                        }
                     } else {
                         reading.deleteCharAt(at - 1)
                         if (cur >= 0) cur = at - 1
@@ -1214,15 +1221,16 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     /** Shrink / extend the first segment, like Gboard's ◀▶ during conversion. */
     private fun moveBoundary(delta: Int) {
         val n = reading.length
-        if (n < 2 && delta < 0) return
         // like Gboard: before converting, the whole reading is one segment and ◀ shrinks it from the end;
         // while converting (space pressed), start from where the converter put the first boundary
         val base = when {
-            cur in 1 until n -> cur
+            cur in 0 until n -> cur
             selected >= 0 -> runCatching { Engine.get(applicationContext).firstSegmentLength(reading.toString()) }.getOrDefault(n)
             else -> n
         }
-        val next = (base + delta).coerceIn(1, n)
+        // the cursor can also go to the very start of the composition (0): ⌫ there deletes the text in
+        // front of it (院進学|して → 院進|して) and the reading stays unconverted
+        val next = (base + delta).coerceIn(0, n)
         if (next == caret && selected < 0) return
         cur = if (next >= n) -1 else next
         refresh()
