@@ -11,7 +11,8 @@ import java.nio.channels.FileChannel
  *
  * Sets:
  *   log    = eval/events.tsv (the author's commit log, tools/build_predict_eval.py), replayed in time order
- *            with learning after each commit like the phone; only the given split is scored
+ *            with learning after each commit like the phone; only the given split is scored. Every pick from the
+ *            candidate list counts, also when the pick was the hiragana itself (about a quarter of the picks)
  *   ajimee = AJIMEE-Bench TSV (tools/ajimee_tsv.py), fresh history, accepted answers
  *   casual = tools/eval/casual.tsv (same format), fresh history
  *
@@ -106,7 +107,9 @@ object ConvEval {
         events.forEachLine { line ->
             val f = line.split('\t')
             val id = f[0]; val reading = unesc(f[3]); val surface = unesc(f[4]); val ctx = unesc(f.getOrElse(6) { "" })
-            if (f[1] == split && surface != reading && reading.isNotEmpty() && reading.length <= 40) score(s, conv, id, reading, ctx, listOf(surface))
+            // scored: every pick from the candidate list, including the hiragana candidate itself (the author taps it
+            // for words written in kana); KANA = committed with Enter / by moving on, not a pick from the list
+            if (f[1] == split && f[5] != "KANA" && reading.isNotEmpty() && reading.length <= 40) score(s, conv, id, reading, ctx, listOf(surface))
             val segs = conv.sentences(reading, ctx).firstOrNull { it.surface == surface }?.segments
             if (segs != null && segs.size >= 2) {
                 var off = 0
