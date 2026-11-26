@@ -109,6 +109,17 @@ class SettingsActivity : Activity() {
             setOnCheckedChangeListener { _, v -> Prefs.setZenzEnabled(this@SettingsActivity, v) }
         })
         col.addView(text("入力が少し止まったときに、文の候補をzenzで並べ替えます。オフにすると電池とメモリを節約できます（キーボードの再起動後に反映）。", 13f))
+        val custom = Engine.customZenz(this)
+        col.addView(text(if (custom.exists()) "使用中: 読み込んだモデル（${custom.length() / 1_000_000} MB）" else "使用中: 標準のモデル（zenz-v3.2-small）", 13f))
+        col.addView(button("zenzモデルを読み込む（.gguf）") {
+            @Suppress("DEPRECATION")
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "*/*" }, REQ_ZENZ)
+        })
+        if (custom.exists()) col.addView(button("標準のモデルに戻す") {
+            confirm("読み込んだzenzモデルを削除して、標準のモデルに戻しますか？") {
+                Thread { custom.delete(); Engine.reloadZenz(this); runOnUiThread { toast("標準のモデルに戻しました"); refresh() } }.start()
+            }
+        })
 
         col.addView(text("ユーザー辞書", 20f))
         col.addView(text("候補に出なかった語を区切って確定（例: 思想史＋学）すると、読み全体の単語として自動で登録されます。", 13f))
@@ -247,6 +258,33 @@ class SettingsActivity : Activity() {
         }.start()
     }
 
+    /** Copies a .gguf model in (checked by its magic bytes) and switches the keyboard to it. */
+    private fun importZenz(uri: android.net.Uri) {
+        toast("読み込み中…")
+        Thread {
+            val dst = Engine.customZenz(this)
+            val tmp = java.io.File(filesDir, "zenz-custom.tmp")
+            val ok = runCatching {
+                contentResolver.openInputStream(uri)!!.use { i ->
+                    val head = ByteArray(4)
+                    if (i.read(head) != 4 || String(head, Charsets.US_ASCII) != "GGUF") return@runCatching false
+                    tmp.outputStream().use { o ->
+                        o.write(head)
+                        val buf = ByteArray(1 shl 16); var total = 4L
+                        while (true) { val n = i.read(buf); if (n < 0) break; total += n; if (total > 600_000_000L) return@runCatching false; o.write(buf, 0, n) }
+                    }
+                }
+                tmp.renameTo(dst)
+            }.getOrDefault(false)
+            if (!ok) tmp.delete() else Engine.reloadZenz(this)
+            val loaded = ok && Engine.converter?.zenz != null
+            runOnUiThread {
+                toast(when { !ok -> "GGUF のモデルファイルではありません"; loaded -> "zenzモデルを切り替えました"; else -> "読み込みましたが、キーボードの次の起動で使われます" })
+                refresh()
+            }
+        }.start()
+    }
+
     private fun saveDict() {
         val text = userDict().serialize()
         Thread { UserDictStore.save(this, text) }.start()
@@ -273,6 +311,7 @@ class SettingsActivity : Activity() {
             return
         }
         if (requestCode == REQ_IMPORT && resultCode == RESULT_OK && uri != null) { importDictionary(uri); return }
+        if (requestCode == REQ_ZENZ && resultCode == RESULT_OK && uri != null) { importZenz(uri); return }
         if (requestCode == REQ_EXPORT && resultCode == RESULT_OK && uri != null) {
             Thread {
                 val n = runCatching { contentResolver.openOutputStream(uri)!!.use { log.exportTo(it) } }.getOrElse { -1 }
@@ -284,6 +323,7 @@ class SettingsActivity : Activity() {
     companion object {
         private const val REQ_EXPORT = 1
         private const val REQ_IMPORT = 2
+        private const val REQ_ZENZ = 7
         private const val REQ_IMAGE = 3
     }
 }

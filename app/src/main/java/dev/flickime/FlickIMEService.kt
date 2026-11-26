@@ -37,12 +37,32 @@ object Engine {
     @Volatile var converter: Converter? = null
     @Volatile private var zenzTried = false
 
+    /** A zenz model the user imported (e.g. one fine-tuned on their own posts); used instead of the bundled one. */
+    fun customZenz(c: Context) = java.io.File(c.filesDir, "zenz-custom.gguf")
+
+    /** Swaps the loaded model after an import / reset (slow; call off the main thread). */
+    @Synchronized fun reloadZenz(c: Context) {
+        val old = converter?.zenz
+        converter?.zenz = null
+        old?.close()
+        zenzTried = false
+        loadZenz(c)
+    }
+
     /** Loads zenz into the converter (slow; call off the main thread). */
-    fun loadZenz(c: Context) {
+    @Synchronized fun loadZenz(c: Context) {
         if (zenzTried) return
         zenzTried = true
         runCatching {
             System.loadLibrary("zenzjni")
+            val custom = customZenz(c)
+            if (custom.length() > 0) {
+                dev.flickime.engine.Zenz.v2Prompt = false // imported models are v3 fine-tunes
+                get(c).zenzGenerate = true
+                val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
+                dev.flickime.engine.Zenz.load(custom.path, threads)?.let { z -> get(c).zenz = z; return }
+                android.util.Log.e("FlickIME", "imported zenz did not load; using the bundled one")
+            }
             // llama.cpp needs a real file: copy the model out of the APK once.
             // zenz-medium.gguf (zenz-v2.5-medium, v2 prompt) when the build has it, else zenz.gguf (v3.1-small)
             val medium = runCatching { c.assets.openFd("zenz-medium.gguf").use { true } }.getOrDefault(false)
