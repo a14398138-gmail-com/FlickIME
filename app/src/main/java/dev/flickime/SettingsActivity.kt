@@ -164,7 +164,7 @@ class SettingsActivity : Activity() {
 
         col.addView(text("英語モードで手打ちした、なぞり入力の単語リストにない英単語は自動で登録され、次からなぞり入力で出るようになります。", 13f))
         col.addView(button("登録した英単語を削除") {
-            confirm("自動登録した英単語をすべて削除しますか？（再起動後に反映）") { UserWordsStore.clear(this); refresh() }
+            confirm("自動登録した英単語をすべて削除しますか？（再起動後に反映）") { UserWordsStore.clear(this); GlideStore.clear(this); refresh() }
         })
 
         col.addView(text("定型文", 20f))
@@ -202,7 +202,7 @@ class SettingsActivity : Activity() {
         })
         col.addView(button("学習履歴をリセット") {
             confirm("変換の学習履歴をリセットしますか？") {
-                Engine.converter?.history?.clear(); HistoryStore.clear(this); toast("リセットしました")
+                Engine.converter?.history?.clear(); HistoryStore.clear(this); GlideStore.clear(this); toast("リセットしました")
             }
         })
         col.addView(text("書き出したファイルは暗号化されていません。扱いに注意してください。ログの鍵はこの端末のキーストアにあり、アプリを削除すると暗号化ログは読めなくなります。", 13f))

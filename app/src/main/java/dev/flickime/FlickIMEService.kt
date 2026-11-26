@@ -68,6 +68,7 @@ object Engine {
     fun glide(c: Context): GlideDecoder = glide ?: synchronized(this) {
         glide ?: GlideDecoder(c.assets.open("en_words.txt").bufferedReader().readLines().filter { it.isNotBlank() }).also { g ->
             UserWordsStore.load(c).forEach { g.addUserWord(it) }
+            g.load(GlideStore.load(c))
             glide = g
         }
     }
@@ -272,6 +273,10 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         typedWord.setLength(0); typedWordValid = false
         if (!valid || privateField || w.length < 2 || !w.any { it.isLetter() }) return
         val ctx = applicationContext
+        // typed words count too (the word before it, from the text in front of what was typed)
+        val beforeAll = currentInputConnection?.getTextBeforeCursor(w.length + 41, 0)?.toString().orEmpty()
+        val cut = beforeAll.lastIndexOf(w)
+        learnGlide(w, previousWord(if (cut >= 0) beforeAll.substring(0, cut) else ""), null, null)
         worker.execute {
             val g = runCatching { Engine.glide(ctx) }.getOrNull() ?: return@execute
             if (!g.contains(w)) { g.addUserWord(w); io.execute { UserWordsStore.add(ctx, w) } }
@@ -923,8 +928,35 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         keyboard.layout = Layouts.of(mode)
     }
 
-    private fun endGlide() {
+    /** The last word before the cursor (for the glide decoder's word pairs). */
+    private fun previousWord(before: String): String =
+        Regex("([A-Za-z']+)[^A-Za-z']*$").find(before.takeLast(40))?.groupValues?.get(1).orEmpty()
+
+    private var glidePath: List<GlideDecoder.P>? = null
+    private var glideGeom: Triple<Map<Char, GlideDecoder.P>, Float, Float>? = null
+    private var glidePrev = ""
+
+    /** Teach the glide decoder the word the user ended up with (and save, off the main thread). */
+    private fun learnGlide(word: String, previous: String, path: List<GlideDecoder.P>?, geom: Triple<Map<Char, GlideDecoder.P>, Float, Float>?) {
+        if (privateField || word.length < 2) return
+        val ctx = applicationContext
+        worker.execute {
+            val g = runCatching { Engine.glide(ctx) }.getOrNull() ?: return@execute
+            g.learn(word, previous, path, geom?.first, geom?.second ?: 1f, geom?.third ?: 1f)
+            val text = g.serialize()
+            io.execute { GlideStore.save(ctx, text) }
+        }
+    }
+
+    private fun endGlide(learn: Boolean = true) {
         if (!glideMode) return
+        // the glided word (whichever candidate is in place now) stays: learn it
+        if (learn) {
+            val word = glideCommitted.removePrefix(glidePrefix)
+            val before = currentInputConnection?.getTextBeforeCursor(glideCommitted.length + 2, 0)?.toString().orEmpty()
+            if (word.isNotEmpty() && before.trimEnd().endsWith(word)) learnGlide(word, glidePrev, glidePath, glideGeom)
+        }
+        glidePath = null; glideGeom = null
         glideMode = false; glideCommitted = ""; glidePrefix = ""
         candidates = emptyList(); selected = -1; renderCandidates()
     }
@@ -932,8 +964,9 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     override fun onGlide(path: List<GlideDecoder.P>, centers: Map<Char, GlideDecoder.P>, keyWidth: Float, keyHeight: Float) {
         finishTypedWord()
         val caps = keyboard.glideCaps
+        val prev = previousWord(currentInputConnection?.getTextBeforeCursor(40, 0)?.toString().orEmpty())
         worker.execute {
-            val words = runCatching { Engine.glide(applicationContext).decode(path, centers, keyWidth, keyHeight) }.getOrDefault(emptyList())
+            val words = runCatching { Engine.glide(applicationContext).decode(path, centers, keyWidth, keyHeight, previous = prev) }.getOrDefault(emptyList())
                 .map { w -> if (caps) w.replaceFirstChar { it.uppercase() } else if (w == "i" || w.startsWith("i'")) w.replaceFirstChar { it.uppercase() } else w }
             main.post {
                 // results are posted in order, so quick successive glides are all kept
@@ -945,6 +978,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
                 glideCommitted = glidePrefix + words[0]
                 ic.commitText(glideCommitted, 1)
                 glideMode = true
+                glidePath = path; glideGeom = Triple(centers, keyWidth, keyHeight); glidePrev = prev
                 candidates = words.map { Candidate(it, 0, Candidate.Kind.ENGLISH) }
                 selected = 0
                 renderCandidates()
@@ -992,7 +1026,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
             // but only if the cursor is still right after it
             val word = glideCommitted.removePrefix(glidePrefix)
             val before = ic.getTextBeforeCursor(glideCommitted.length, 0)?.toString().orEmpty()
-            endGlide()
+            endGlide(learn = false)   // deleted right away: not what the user wanted
             when {
                 // the word plus the space we put in front of it
                 before == glidePrefix + word -> ic.deleteSurroundingText(before.length, 0)

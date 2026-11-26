@@ -54,6 +54,16 @@ class GlideDecoder(words: List<String>) {
         return out
     }
 
+    /** Centred and scaled to unit size (longest side of the bounding box). */
+    private fun normShape(pts: List<P>): List<P> {
+        var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE; var maxX = -Float.MAX_VALUE; var maxY = -Float.MAX_VALUE
+        var cx = 0f; var cy = 0f
+        for (p in pts) { minX = minOf(minX, p.x); maxX = maxOf(maxX, p.x); minY = minOf(minY, p.y); maxY = maxOf(maxY, p.y); cx += p.x; cy += p.y }
+        cx /= pts.size; cy /= pts.size
+        val sc = maxOf(maxX - minX, maxY - minY, 1e-3f)
+        return pts.map { P((it.x - cx) / sc, (it.y - cy) / sc) }
+    }
+
     private fun length(pts: List<P>): Float {
         var s = 0f
         for (i in 1 until pts.size) s += hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y)
@@ -70,10 +80,14 @@ class GlideDecoder(words: List<String>) {
      * Returns up to [limit] words, best first. Keys are usually taller than wide, so the
      * y axis is rescaled by [keyWidth]/[keyHeight] to make every key square before matching.
      */
-    fun decode(path: List<P>, centers: Map<Char, P>, keyWidth: Float, keyHeight: Float = keyWidth, limit: Int = 8): List<String> {
+    fun decode(path: List<P>, centers: Map<Char, P>, keyWidth: Float, keyHeight: Float = keyWidth, limit: Int = 8,
+               previous: String = ""): List<String> {
         if (path.size < 2) return emptyList()
         val sy = keyWidth / keyHeight
-        val sp = path.map { P(it.x, it.y * sy) }
+        // the user's habitual offset (learned), taken out before matching
+        val bx = biasX * keyWidth; val by = biasY * keyHeight
+        val sp = path.map { P(it.x - bx, (it.y - by) * sy) }
+        prevWord = previous.lowercase()
         val sc = centers.mapValues { P(it.value.x, it.value.y * sy) }
         return decodeScaled(sp, sc, keyWidth, limit, strict = true).ifEmpty { decodeScaled(sp, sc, keyWidth, limit, strict = false) }
     }
@@ -81,6 +95,7 @@ class GlideDecoder(words: List<String>) {
     private fun decodeScaled(path: List<P>, centers: Map<Char, P>, keyWidth: Float, limit: Int, strict: Boolean): List<String> {
         val n = 48
         val user = resample(path, n)
+        val userN = normShape(user)
         val userLen = length(path)
         val radius = keyWidth * (if (strict) 1.3f else 2.2f)
         val starts = near(path.first(), centers, radius)
@@ -104,6 +119,11 @@ class GlideDecoder(words: List<String>) {
                 var d = 0f
                 for (k in 0 until n) d += hypot(r[k].x - user[k].x, r[k].y - user[k].y)
                 d /= n * keyWidth
+                // shape channel (SHARK2): same gesture drawn smaller / bigger / shifted still matches
+                val rn = normShape(r)
+                var ds = 0f
+                for (k in 0 until n) ds += hypot(rn[k].x - userN[k].x, rn[k].y - userN[k].y)
+                ds /= n
                 // every letter's key should be visited somewhere along the path
                 var miss = 0f
                 for (c in ideal) {
@@ -111,12 +131,79 @@ class GlideDecoder(words: List<String>) {
                     for (p in user) best = minOf(best, hypot(c.x - p.x, c.y - p.y))
                     if (best > keyWidth * 0.7f) miss += best / keyWidth
                 }
-                val freq = 0.06f * ln((rank[w] ?: 40000) + 10f)
-                scored.add(w to d + 0.5f * miss + freq)
+                val freq = FREQ_W * ln((rank[w] ?: 40000) + 10f)
+                scored.add(w to LOC_W * d + SHAPE_W * ds + MISS_W * miss + freq - personal(w))
             }
         }
         return scored.sortedBy { it.second }.take(limit).map { display[it.first] ?: it.first }
     }
 
-    companion object { const val USER_RANK = 300 }
+    // ---- personalisation: what this user glides, after which word, and where their finger lands ----
+    private val counts = HashMap<String, Int>()
+    private val pairs = HashMap<String, Int>()
+    @Volatile private var prevWord = ""
+    @Volatile var biasX = 0f; private set
+    @Volatile var biasY = 0f; private set
+    var version = 0; private set
+
+    /** Bonus (subtracted from the distance) for words this user picks, more so right after the same word. */
+    private fun personal(w: String): Float {
+        val c = counts[w] ?: 0
+        val p = if (prevWord.isEmpty()) 0 else pairs[prevWord + " " + w] ?: 0
+        return PERSONAL_UNI * ln(1f + c) + PERSONAL_PAIR * ln(1f + p)
+    }
+
+    /**
+     * The user ended up with [word] (kept the first candidate, picked another, or typed it): count it, and
+     * when [path] is given, move the learned offset towards where this gesture started and ended
+     * relative to the word's first and last keys.
+     */
+    @Synchronized fun learn(word: String, previous: String = "", path: List<P>? = null, centers: Map<Char, P>? = null,
+                            keyWidth: Float = 1f, keyHeight: Float = keyWidth) {
+        val w = word.lowercase()
+        if (w.length < 2 || !w.all { it in 'a'..'z' || it == '\'' }) return
+        counts[w] = minOf((counts[w] ?: 0) + 1, 1000)
+        val pv = previous.lowercase()
+        if (pv.isNotEmpty()) pairs["$pv $w"] = minOf((pairs["$pv $w"] ?: 0) + 1, 1000)
+        if (!rank.containsKey(w)) put(w, USER_RANK)
+        if (path != null && centers != null && path.size >= 2) {
+            val a = centers[w.first()]; val b = centers[w.last { it != '\'' }]
+            if (a != null && b != null) {
+                val dx = ((path.first().x - a.x) + (path.last().x - b.x)) / 2 / keyWidth
+                val dy = ((path.first().y - a.y) + (path.last().y - b.y)) / 2 / keyHeight
+                biasX = (biasX * (1 - BIAS_RATE) + dx * BIAS_RATE).coerceIn(-0.6f, 0.6f)
+                biasY = (biasY * (1 - BIAS_RATE) + dy * BIAS_RATE).coerceIn(-0.6f, 0.6f)
+            }
+        }
+        version++
+    }
+
+    @Synchronized fun serialize(): String = buildString {
+        append("B\t").append(biasX).append('\t').append(biasY).append('\n')
+        counts.forEach { (w, c) -> append("U\t").append(w).append('\t').append(c).append('\n') }
+        pairs.forEach { (k, c) -> append("P\t").append(k).append('\t').append(c).append('\n') }
+    }
+
+    @Synchronized fun load(text: String) {
+        for (line in text.lineSequence()) {
+            val f = line.split('\t')
+            when (f.getOrNull(0)) {
+                "B" -> if (f.size == 3) { biasX = f[1].toFloatOrNull() ?: 0f; biasY = f[2].toFloatOrNull() ?: 0f }
+                "U" -> if (f.size == 3) { counts[f[1]] = f[2].toIntOrNull() ?: 0; if (!rank.containsKey(f[1])) put(f[1], USER_RANK) }
+                "P" -> if (f.size == 3) pairs[f[1]] = f[2].toIntOrNull() ?: 0
+            }
+        }
+    }
+
+    companion object {
+        const val USER_RANK = 300
+        var LOC_W = 1f
+        var SHAPE_W = 3f
+        var MISS_W = 0.05f
+        var FREQ_W = 0.15f
+        var PERSONAL_UNI = 0.25f
+        var PERSONAL_PAIR = 0.15f
+        // learning a finger offset did not help in simulation (the shape channel already absorbs it): off
+        var BIAS_RATE = 0f
+    }
 }

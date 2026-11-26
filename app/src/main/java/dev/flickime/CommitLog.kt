@@ -132,6 +132,14 @@ object UserWordsStore {
     fun clear(c: Context) { f(c).delete() }
 }
 
+/** What the glide decoder learned about this user (counts, word pairs), encrypted. */
+object GlideStore {
+    private fun f(c: Context) = File(c.filesDir, "glide.bin")
+    fun load(c: Context): String = runCatching { String(Crypto.decrypt(f(c).readBytes())) }.getOrDefault("")
+    @Synchronized fun save(c: Context, text: String) { runCatching { atomicWrite(f(c), Crypto.encrypt(text.toByteArray())) } }
+    fun clear(c: Context) { f(c).delete() }
+}
+
 /** Clipboard history kept by the keyboard (encrypted, like everything else it stores). */
 data class ClipItem(val text: String, val pinned: Boolean, val time: Long)
 
