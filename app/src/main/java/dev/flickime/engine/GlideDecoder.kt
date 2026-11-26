@@ -11,6 +11,8 @@ class GlideDecoder(words: List<String>) {
     class P(val x: Float, val y: Float)
 
     private val rank = HashMap<String, Int>()
+    /** All words, sorted, for prefix completion while typing */
+    private val sortedWords = java.util.TreeSet<String>()
     private val byEnds = HashMap<String, MutableList<String>>()
     /** lowercase key -> how the user wrote it (e.g. "flickime" -> "FlickIME") */
     private val display = HashMap<String, String>()
@@ -23,6 +25,7 @@ class GlideDecoder(words: List<String>) {
         if (w.length < 2) return
         if (rank.containsKey(w)) { rank[w] = minOf(rank[w]!!, r); return }
         rank[w] = r
+        sortedWords.add(w)
         byEnds.getOrPut("${w.first()}${w.last()}") { ArrayList() }.add(w)
     }
 
@@ -136,6 +139,30 @@ class GlideDecoder(words: List<String>) {
             }
         }
         return scored.sortedBy { it.second }.take(limit).map { display[it.first] ?: it.first }
+    }
+
+    /**
+     * Completions of the word being typed, best first: the typed word itself when it is a word, then
+     * longer words by frequency and this user's picks (more so after [previous]).
+     */
+    @Synchronized fun complete(prefix: String, previous: String = "", limit: Int = 6): List<String> {
+        val p = prefix.lowercase()
+        if (p.isEmpty()) return emptyList()
+        prevWord = previous.lowercase()
+        val sub = sortedWords.subSet(p, true, p + '\uffff', false)
+        val scored = ArrayList<Pair<String, Float>>()
+        for (w in sub) scored.add(w to FREQ_W * ln((rank[w] ?: 40000) + 10f) - personal(w) + 0.02f * (w.length - p.length))
+        val out = scored.sortedBy { it.second }.map { it.first }.take(limit).toMutableList()
+        if (p in rank) { out.remove(p); out.add(0, p) }
+        return out.take(limit).map { display[it] ?: it }
+    }
+
+    /** Words this user typed right after [previous], most frequent first (next-word prediction). */
+    @Synchronized fun nextWords(previous: String, limit: Int = 5): List<String> {
+        val pv = previous.lowercase()
+        if (pv.isEmpty()) return emptyList()
+        return pairs.entries.filter { it.key.startsWith("$pv ") && it.value >= 2 }
+            .sortedByDescending { it.value }.take(limit).map { it.key.substringAfter(' ').let { w -> display[w] ?: w } }
     }
 
     // ---- personalisation: what this user glides, after which word, and where their finger lands ----

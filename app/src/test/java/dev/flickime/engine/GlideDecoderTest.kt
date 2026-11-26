@@ -76,4 +76,15 @@ class GlideDecoderTest {
         println("top1 $top1/${test.size}, top3 $top3/${test.size}")
         assertTrue(top3 >= test.size - 2)
     }
+
+    @Test fun completesWhileTyping() {
+        val d = GlideDecoder(words)
+        val c = d.complete("thank")
+        println("complete thank -> $c")
+        assertTrue(c.first() == "thank" && "thanks" in c)
+        // personal: after learning, the user's word comes first for its prefix, and follows its usual previous word
+        repeat(3) { d.learn("kotlin", previous = "write") }
+        assertTrue(d.complete("kot").first() == "kotlin")
+        assertTrue(d.nextWords("write").first() == "kotlin")
+    }
 }

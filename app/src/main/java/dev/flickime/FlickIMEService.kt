@@ -291,7 +291,79 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
                 typedWordValid = before.isEmpty() || !isWordChar(before[0]) && !before[0].isDigit()
             }
             typedWord.append(text)
-        } else finishTypedWord()
+            suggestTyping()
+        } else {
+            val prev = typedWord.toString()
+            finishTypedWord()
+            if (text == " " && prev.isNotEmpty()) suggestNext(prev) else clearSuggestions()
+        }
+    }
+
+    /** Candidates in the bar are completions of the word being typed (English), not conversions. */
+    private var typeSuggest = false
+    private var suggestSeq = 0
+    /** Cursor jumps until then come from accepting a suggestion, not from the user moving the cursor. */
+    private var suggestEditUntil = 0L
+
+    /** Completions of the typed word (posted back in order; stale results are dropped). */
+    private fun suggestTyping() {
+        val w = typedWord.toString()
+        if (!typedWordValid || w.isEmpty() || privateField) { clearSuggestions(); return }
+        val prev = previousWord(currentInputConnection?.getTextBeforeCursor(w.length + 40, 0)?.toString().orEmpty().dropLast(w.length))
+        val my = ++suggestSeq
+        val caps = w.first().isUpperCase()
+        val ctx = applicationContext
+        worker.execute {
+            val list = runCatching { Engine.glide(ctx).complete(w, prev) }.getOrDefault(emptyList())
+                .map { if (caps) it.replaceFirstChar { c -> c.uppercase() } else it }
+            main.post {
+                if (my != suggestSeq || glideMode || mode != Mode.ALPHA || typedWord.toString() != w) return@post
+                showSuggestions(list)
+            }
+        }
+    }
+
+    /** After a word and a space: what this user usually writes next. */
+    private fun suggestNext(prev: String) {
+        if (privateField) return
+        val my = ++suggestSeq
+        val ctx = applicationContext
+        worker.execute {
+            val list = runCatching { Engine.glide(ctx).nextWords(prev) }.getOrDefault(emptyList())
+            main.post { if (my == suggestSeq && !glideMode && mode == Mode.ALPHA && typedWord.isEmpty()) showSuggestions(list) }
+        }
+    }
+
+    private fun showSuggestions(list: List<String>) {
+        if (list.isEmpty()) { clearSuggestions(); return }
+        typeSuggest = true
+        candidates = list.map { Candidate(it, 0, Candidate.Kind.ENGLISH) }
+        selected = -1
+        renderCandidates()
+    }
+
+    private fun clearSuggestions() {
+        suggestSeq++
+        if (!typeSuggest) return
+        typeSuggest = false
+        if (reading.isEmpty() && !glideMode) { candidates = emptyList(); selected = -1; renderCandidates() }
+    }
+
+    /** Tapped a suggestion: it replaces the word being typed, followed by a space (like Gboard). */
+    private fun acceptSuggestion(i: Int) {
+        val ic = currentInputConnection ?: return
+        val w = candidates.getOrNull(i)?.surface ?: return
+        val typed = typedWord.toString()
+        val prevForLearn = previousWord(ic.getTextBeforeCursor(typed.length + 40, 0)?.toString().orEmpty().dropLast(typed.length))
+        suggestEditUntil = android.os.SystemClock.uptimeMillis() + 400
+        ic.beginBatchEdit()
+        if (typed.isNotEmpty() && ic.getTextBeforeCursor(typed.length, 0)?.toString() == typed) ic.deleteSurroundingText(typed.length, 0)
+        ic.commitText("$w ", 1)
+        ic.endBatchEdit()
+        typedWord.setLength(0); typedWordValid = false
+        typeSuggest = false
+        learnGlide(w, prevForLearn, null, null)
+        suggestNext(w)
     }
 
     private val dp get() = resources.displayMetrics.density
@@ -926,6 +998,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
 
     private fun applyMode() {
         keyboard.layout = Layouts.of(mode)
+        if (mode != Mode.ALPHA) clearSuggestions()
     }
 
     /** The last word before the cursor (for the glide decoder's word pairs). */
@@ -962,6 +1035,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onGlide(path: List<GlideDecoder.P>, centers: Map<Char, GlideDecoder.P>, keyWidth: Float, keyHeight: Float) {
+        typeSuggest = false; suggestSeq++
         finishTypedWord()
         val caps = keyboard.glideCaps
         val prev = previousWord(currentInputConnection?.getTextBeforeCursor(40, 0)?.toString().orEmpty())
@@ -1039,9 +1113,10 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         endGlide()
         // the user moved the cursor away and the editor dropped our composing region without telling us
         if (cursorLeftComposition()) dropComposition()
-        if (action == Action.Backspace && typedWord.isNotEmpty()) typedWord.deleteCharAt(typedWord.length - 1)
-        else if (action == Action.Left || action == Action.Right) { typedWord.setLength(0); typedWordValid = false }
-        else if (action != Action.Backspace && action != Action.Shift) finishTypedWord()
+        if (action == Action.Backspace && typedWord.isNotEmpty()) { typedWord.deleteCharAt(typedWord.length - 1); if (mode == Mode.ALPHA) main.post { suggestTyping() } }
+        else if (action == Action.Left || action == Action.Right) { typedWord.setLength(0); typedWordValid = false; clearSuggestions() }
+        else if (action != Action.Backspace && action != Action.Shift) { finishTypedWord(); clearSuggestions() }
+        else if (action == Action.Backspace && typeSuggest) clearSuggestions()
         when (action) {
             Action.Backspace -> when {
                 selected >= 0 -> { selected = -1; showComposing(); renderCandidates() }
@@ -1157,7 +1232,8 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         if (reading.isEmpty() && (newSelStart != oldSelStart || newSelEnd != oldSelEnd) && candidatesStart < 0) {
             // a jump that is not explained by our own typing breaks word tracking
             val typedJump = newSelStart == newSelEnd && newSelStart - oldSelEnd in 0..(if (glideMode) glideCommitted.length else 1)
-            if (!typedJump) { typedWord.setLength(0); typedWordValid = false; endGlide() }
+            val ownEdit = android.os.SystemClock.uptimeMillis() < suggestEditUntil
+            if (!typedJump && !ownEdit) { typedWord.setLength(0); typedWordValid = false; endGlide(); clearSuggestions() }
         }
     }
 
@@ -1310,6 +1386,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
 
     private fun commitCandidate(i: Int) {
         if (glideMode) { replaceGlide(i); return }
+        if (typeSuggest) { acceptSuggestion(i); return }
         val c = candidates.getOrNull(i) ?: return
         commit(c, rank = i)
     }
