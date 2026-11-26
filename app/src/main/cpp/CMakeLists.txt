@@ -13,7 +13,10 @@ set(LLAMA_BUILD_APP OFF CACHE BOOL "" FORCE)
 set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)
 set(LLAMA_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
-set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+# the phone build targets a fixed ABI; a PC build (tools/loop/build_zenz_host.sh) uses the host CPU
+if (ANDROID)
+    set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+endif()
 set(GGML_LLAMAFILE OFF CACHE BOOL "" FORCE)
 
 add_subdirectory(llama.cpp)
