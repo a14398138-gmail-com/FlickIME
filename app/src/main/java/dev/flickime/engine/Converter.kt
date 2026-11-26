@@ -61,6 +61,23 @@ class UserHistory {
 
     @Synchronized fun pair(w1: String, w2: String) = pairs["$w1\t$w2"] ?: 0
 
+    /**
+     * Surfaces the user deliberately picked for exactly [reading] (weight >= 2), most picked first.
+     * Unlike [completions] these spell the reading itself, and they may not be in any dictionary
+     * (a Gboard-style shorthand, a mixed-script word): without this they could never come back.
+     */
+    @Synchronized fun picks(reading: String, limit: Int): List<String> {
+        if (reading !in readings) return emptyList()
+        val sf = byReading[reading] ?: return emptyList()
+        return sf.asSequence()
+            .map { it to (pos[key(reading, it)] ?: 0) }
+            .filter { it.second >= 2 }
+            .sortedByDescending { it.second }
+            .take(limit)
+            .map { it.first }
+            .toList()
+    }
+
     @Synchronized fun learn(reading: String, surface: String, weight: Int = 2, undo: Undo? = null) {
         if (!ok(reading, surface)) return
         val k = key(reading, surface)
@@ -382,7 +399,9 @@ class Converter(
     }
 
     /** Paths taken from the lattice, and how many of them (best by the LM) are kept for zenz. */
-    var nbestSearch = NBEST
+    // search wider than what zenz scores: the cheapest path can hide from the 8-path A* behind its
+    // Viterbi heuristic (真空|ライン vs 真空|ら|院), and the extra paths only cost trigram lookups
+    var nbestSearch = 16
     var nbestKeep = NBEST
 
     /** Add zenz's greedy generation to the candidates it scores (tuning knobs). */
@@ -426,9 +445,12 @@ class Converter(
         // optionally zenz's own greedy output joins the candidates (it can be outside the N-best);
         // it has no n-gram score, so it gets the worst one plus a penalty
         // only if it really spells the reading (generation can drop or add characters); the alignment
-        // also gives it word segments, so ◀▶ and learning work on it like on any other candidate
+        // also gives it word segments, so ◀▶ and learning work on it like on any other candidate.
+        // A generation that merely repeats the reading (in kana) is dropped: the KANA candidates already
+        // offer it, and as a sentence it evicts the real conversions from the top of the list.
         val gen = if (zenzGenerate && reading.length >= 2) z.generate(reading, context)
-            ?.takeIf { g -> base.none { it.surface == g } }?.let { g -> align(reading, g) } else null
+            ?.takeIf { g -> g != reading && g != Kana.toKatakana(reading) && base.none { it.surface == g } }
+            ?.let { g -> align(reading, g) } else null
         val all = if (gen != null) base + Sentence(gen, base.last().score + zenzGenPenalty) else base
         val nll = z.score(reading, context, all.map { it.surface }) ?: return false
         val ranked = all.indices.sortedBy { all[it].score * zenzWeight / 1000f + nll[it] }.map { all[it] }
@@ -560,32 +582,45 @@ class Converter(
         fun add(c: Candidate) { if (out.size < limit && !c.surface.any { it == '\u3099' || it == '\u309a' || it == '゜' && c.surface.length > 1 }) out.putIfAbsent(c.surface to c.consumed, c) }
 
         val ranked = sentences(reading, context)
-        val path = ranked.first().segments
-        val full = words(reading, limit)
-        add(Candidate(ranked.first().surface, n, Candidate.Kind.SENTENCE, path))
+        // zenz's first choice leads, also when it is the kana itself (a third of the author's picks are
+        // the kana: demoting it cost 9 points of top-1 on the log)
+        val top = ranked.first()
+        val lead = top
+        val path = lead.segments
+        // the bare kana reading has its own candidate further down; as a word it only wastes a bar slot
+        val full = words(reading, limit).filter { it != reading }
+        add(Candidate(lead.surface, n, Candidate.Kind.SENTENCE, path))
+        if (lead !== top) add(Candidate(top.surface, n, Candidate.Kind.SENTENCE, top.segments))
+        // what the user has picked for this exact reading before, dictionary or not
+        history.picks(reading, 3).forEach { add(Candidate(it, n, Candidate.Kind.WORD)) }
         val preds = predictions(reading, context)
         // other whole-sentence readings when the reading spans several words
-        fun addAltSentences() { if (path.size >= 2) ranked.drop(1).take(2).forEach { add(Candidate(it.surface, n, Candidate.Kind.SENTENCE, it.segments)) } }
-        if (!predictionsFirst) addAltSentences()
+        fun addAltSentences() { if (path.size >= 2) ranked.drop(1).filter { it !== lead }.take(2).forEach { add(Candidate(it.surface, n, Candidate.Kind.SENTENCE, it.segments)) } }
+        // the reading is fully spelled: exact conversions come before the guesses about what may follow
+        addAltSentences()
 
         val own = preds.filter { history.count(it.fullReading!!, it.surface) > 0 || userDict.lookup(it.fullReading).any { w -> w.surface == it.surface } }
         own.forEach { add(it) }
-        fun addDictPredictions() = preds.forEach { add(it) }
+        var predsAdded = false
+        fun addDictPredictions() { if (predsAdded) return; predsAdded = true; preds.forEach { add(it) } }
         // while typing several words, predictions matter more than other ways to split what is typed
-        if (full.size < 2 || predictionsFirst && path.size >= 2) addDictPredictions()
-        if (predictionsFirst) addAltSentences()
+        if (predictionsFirst && path.size >= 2) addDictPredictions()
 
         val en = english[reading].orEmpty()
         val sym = symbols[reading].orEmpty()
+        // from three chars on, exact words deserve the slots before the guesses (word#4 answers
+        // like 気体/以降); one- and two-char states keep predictions closer for ksr
+        val predAt = if (n >= 3) 3 else 2
         full.forEachIndexed { i, s ->
             add(Candidate(s, n, Candidate.Kind.WORD))
-            if (i == 1) addDictPredictions()
             if (i == 1) en.forEach { add(Candidate(it, n, Candidate.Kind.ENGLISH)) }
+            if (i == predAt) addDictPredictions()
             if (i == 3) sym.take(6).forEach { add(Candidate(it, n, Candidate.Kind.SYMBOL)) }
         }
         en.forEach { add(Candidate(it, n, Candidate.Kind.ENGLISH)) }
         sym.forEach { add(Candidate(it, n, Candidate.Kind.SYMBOL)) }
         kanjiOf(reading).forEach { add(Candidate(it, n, Candidate.Kind.WORD)) }
+        addDictPredictions()
 
         // first segment of the best path, then other prefixes (longest first)
         val firstLen = path.firstOrNull()?.first ?: n
