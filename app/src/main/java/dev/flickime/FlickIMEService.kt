@@ -1258,7 +1258,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
                     if (my != seq) return@execute
                 }
                 if (sl == 0 && conv.zenzRanked(r, ctx)) engine = "zenz"
-                if (sl in 1..r.length) conv.segmentCandidates(r, sl) else conv.candidates(r, ctx)
+                if (sl in 1..r.length) conv.segmentCandidates(r, sl, context = ctx) else conv.candidates(r, ctx)
             }.getOrElse {
                 engine = "fallback"
                 listOf(Candidate(r, r.length, Candidate.Kind.KANA), Candidate(Kana.toKatakana(r), r.length, Candidate.Kind.KANA))

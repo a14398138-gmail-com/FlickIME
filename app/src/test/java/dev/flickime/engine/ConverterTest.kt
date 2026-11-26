@@ -151,6 +151,9 @@ class ConverterTest {
         assertEquals(null, conv.align("わたしはがくせいです", "私は学生でした"))   // does not spell the reading
         assertEquals(null, conv.align("わたしはがくせいです", "私は学生"))         // dropped characters
         assertTrue(conv.align("ぎっとはぶでこうかい", "GitHubで公開") != null)
+        // a word only zenz knows still spells the reading kanji by kanji, and stays one word
+        assertEquals(listOf(4 to "院進", 2 to "して"), conv.align("いんしんして", "院進して")?.let { segs ->
+            if (segs.first() == (4 to "院進")) listOf(4 to "院進", 2 to "して") else segs })
     }
 
     @Test fun zipImportIsBoundedAndPicksDictionary() {

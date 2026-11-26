@@ -377,6 +377,10 @@ class Converter(
 
     /** Neural re-ranker (optional). */
     @Volatile var zenz: Zenz? = null
+    private val segGenCache = object : LinkedHashMap<String, String>(32, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?) = size > 64
+    }
+
     /** Paths taken from the lattice, and how many of them (best by the LM) are kept for zenz. */
     var nbestSearch = NBEST
     var nbestKeep = NBEST
@@ -459,6 +463,9 @@ class Converter(
                 userDict.lookup(r).forEach { ways.add(len to it.surface) }
                 english[r]?.forEach { ways.add(len to it) }
                 symbols[r]?.forEach { ways.add(len to it) }
+                // single kanji by their readings: a new word zenz knows but the dictionary lacks (院進, 鬼滅)
+                // is still checked character by character
+                if (len <= 4) kanjiOf(r).forEach { ways.add(len to it) }
             }
             for (j in js) for ((len, w) in ways) {
                 if (w.isEmpty() || !surface.startsWith(w, j)) continue
@@ -471,7 +478,16 @@ class Converter(
         var i = n; var j = m
         while (i > 0) { val pi = prevI[i][j]; val pj = prevJ[i][j]; segs.add((i - pi) to surface.substring(pj, j)); i = pi; j = pj }
         segs.reverse()
-        return segs
+        // runs of single kanji become one word (院|進 -> 院進), so learning keeps the compound
+        fun single(w: String) = w.codePointCount(0, w.length) == 1 && Character.isIdeographic(w.codePointAt(0))
+        val merged = ArrayList<Pair<Int, String>>(); var lastSingleRun = false
+        for (sg in segs) {
+            if (single(sg.second) && lastSingleRun) {
+                val last = merged.removeAt(merged.size - 1)
+                merged.add((last.first + sg.first) to (last.second + sg.second))
+            } else { merged.add(sg); lastSingleRun = single(sg.second) }
+        }
+        return merged
     }
 
     private fun ngramSentences(reading: String): List<Sentence> {
@@ -688,7 +704,7 @@ class Converter(
      * Candidates when the user has set the first segment to [len] chars (Gboard-style ◀▶).
      * The first entry converts the whole reading with that boundary; the rest cover only the segment.
      */
-    fun segmentCandidates(reading: String, len: Int, limit: Int = 120): List<Candidate> {
+    fun segmentCandidates(reading: String, len: Int, limit: Int = 120, context: String = ""): List<Candidate> {
         val n = reading.length
         val l = len.coerceIn(1, n)
         val seg = reading.substring(0, l)
@@ -703,8 +719,14 @@ class Converter(
             val segments = if (sameAsAuto) path else listOf(l to ws.first()) + bestPath(reading.substring(l)).map { (a, b) -> a to b }
             add(Candidate(segments.joinToString("") { it.second }, n, Candidate.Kind.SENTENCE, segments))
         }
+        // zenz's own conversion of the segment: words the dictionary lacks (院進) show up here
+        val gen = if (zenzGenerate && seg.length >= 2) zenz?.let { z ->
+            synchronized(segGenCache) { segGenCache[context + "\u0000" + seg] } ?: (z.generate(seg, context)
+                ?.takeIf { g -> align(seg, g) != null } ?: "").also { g -> synchronized(segGenCache) { segGenCache[context + "\u0000" + seg] = g } }
+        }?.takeIf { it.isNotEmpty() } else null
         ws.forEachIndexed { i, w ->
             add(Candidate(w, l, Candidate.Kind.WORD))
+            if (i == 0 && gen != null) add(Candidate(gen, l, Candidate.Kind.WORD))
             if (i == 1) english[seg]?.forEach { add(Candidate(it, l, Candidate.Kind.ENGLISH)) }
         }
         english[seg]?.forEach { add(Candidate(it, l, Candidate.Kind.ENGLISH)) }
