@@ -2,7 +2,7 @@
 """Build lm.bin (pruned interpolated Kneser-Ney word bigram + trigram model) from lm_corpus.py output.
 
 usage: build_lm.py CORPUS_DIR OUT_FILE [tatoeba_weight] [min_count] [max_bigrams] [max_trigrams]
-  EXTRA="name:weight,..." adds more streams from lm_add_stream.py (e.g. EXTRA=colloq:3)
+  EXTRA="name:weight[:trigram_min],..." adds more streams from lm_add_stream.py (e.g. EXTRA=colloq:3,o2ch:1:2)
 
 Format (little endian), read by engine/LanguageModel.kt:
   int magic 'FLM1', nUni, nBi; float step; int unkCost; int reserved
@@ -46,12 +46,14 @@ def bigrams(path, chunk=40_000_000):
     u, inv = np.unique(k, return_inverse=True)
     return u, np.bincount(inv, weights=c)
 
-EXTRA = [(x.split(':')[0], float(x.split(':')[1])) for x in os.environ.get('EXTRA', '').split(',') if x]
+# name:weight[:trigram_min_count]
+EXTRA = [(x.split(':')[0], float(x.split(':')[1]), int(x.split(':')[2]) if x.count(':') > 1 else 1)
+         for x in os.environ.get('EXTRA', '').split(',') if x]
 wk, wc = bigrams(os.path.join(src, 'wiki.npy'))
 tk, tc = bigrams(os.path.join(src, 'tatoeba.npy'))
 print('wiki bigram types', len(wk), 'tatoeba', len(tk), flush=True)
 ks, cs = [wk, tk], [wc, tc * TW]
-for name, w in EXTRA:
+for name, w, _ in EXTRA:
     ek, ec = bigrams(os.path.join(src, name + '.npy')); ks.append(ek); cs.append(ec * w)
     print(name, 'bigram types', len(ek), 'weight', w, flush=True)
 keys = np.concatenate(ks); cnts = np.concatenate(cs); del ks, cs
@@ -133,8 +135,8 @@ def trigrams(path, keep_min, chunk=30_000_000):
 t3k, t3c = trigrams(os.path.join(src, 'wiki.npy'), 2)
 u3k, u3c = trigrams(os.path.join(src, 'tatoeba.npy'), 1)
 k3l, c3l = [t3k, u3k], [t3c, u3c * TW]
-for name, w in EXTRA:
-    ek, ec = trigrams(os.path.join(src, name + '.npy'), 1); k3l.append(ek); c3l.append(ec * w)
+for name, w, tmin in EXTRA:
+    ek, ec = trigrams(os.path.join(src, name + '.npy'), tmin); k3l.append(ek); c3l.append(ec * w)
 k3 = np.concatenate(k3l); c3 = np.concatenate(c3l); del k3l, c3l
 k3, inv = np.unique(k3, return_inverse=True); c3 = np.bincount(inv, weights=c3)
 del inv, t3k, t3c, u3k, u3c
