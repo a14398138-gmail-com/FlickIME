@@ -135,9 +135,16 @@ class GlassBackdrop(
             val sw = w / scale; val sh = h / scale
             val sx = (image.width - sw) / 2; val sy = (image.height - sh) / 2
             p.shader = null
+            if (preVeiled) { p.alpha = 255; c.drawBitmap(image, Rect(sx.toInt(), sy.toInt(), (sx + sw).toInt(), (sy + sh).toInt()), b, p); return }
+            // frosted: the picture shows through a pale (dark at night) base at the veil's strength, and the
+            // veil goes over it once more. (Until 0.84 this look came from the paint keeping the veil's alpha
+            // from the previous frame, so it appeared only from the second frame on; now every frame is the same.)
+            val a = if (night) pct(80, params.veil) else pct(70, params.veil)
+            p.color = if (night) Color.rgb(14, 16, 28) else Color.rgb(222, 228, 242)
+            c.drawRect(b, p)
+            p.color = Color.argb(a, 0, 0, 0) // only the alpha matters for the picture
             c.drawBitmap(image, Rect(sx.toInt(), sy.toInt(), (sx + sw).toInt(), (sy + sh).toInt()), b, p)
-            if (preVeiled) return
-            p.color = if (night) Color.argb(pct(80, params.veil), 0, 0, 0) else Color.argb(pct(70, params.veil), 255, 255, 255)
+            p.color = if (night) Color.argb(a, 0, 0, 0) else Color.argb(a, 255, 255, 255)
             c.drawRect(b, p)
             return
         }

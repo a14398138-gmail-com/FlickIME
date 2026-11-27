@@ -664,7 +664,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     override fun onCreate() {
         super.onCreate()
         // decode the background picture before the first show needs it
-        worker.execute { runCatching { if (Prefs.glassTheme(applicationContext)) BackgroundImage.veiled(applicationContext, night, Prefs.glassParams(applicationContext).veil) } }
+        worker.execute { runCatching { if (Prefs.glassTheme(applicationContext)) BackgroundImage.load(applicationContext) } }
         if (Prefs.zenzEnabled(this)) zenzWorker.execute { Engine.loadZenz(applicationContext) }
         clipboard.addPrimaryClipChangedListener(clipListener)
         io.execute { val loaded = ClipStore.load(applicationContext); main.post { clips.addAll(0, loaded.filter { l -> clips.none { it.text == l.text } }) } }
@@ -782,9 +782,9 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         barViews.clear()
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         inputRoot = root
-        val bgImage = if (theme.glass) BackgroundImage.veiled(this, night, theme.params.veil) else null
+        val bgImage = if (theme.glass) BackgroundImage.load(this) else null
         if (bgImage != null) {
-            root.background = opaque(GlassBackdrop(night, translucent = false, image = bgImage, params = theme.params, preVeiled = true))
+            root.background = opaque(GlassBackdrop(night, translucent = false, image = bgImage, params = theme.params))
         } else if (theme.glass) {
             // opaque backdrop: the app behind the keyboard must not show through
             root.background = opaque(GlassBackdrop(night, translucent = false, params = theme.params))
