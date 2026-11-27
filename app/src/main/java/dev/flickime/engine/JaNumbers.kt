@@ -53,7 +53,7 @@ object JaNumbers {
         }
         small = m
         val mm = HashMap<String, Int>()
-        for (n in 1..9999) for ((r, v) in m) if (v == n.toString() && !r.endsWith("っ") && !(r.endsWith("よ"))) mm.putIfAbsent(r + "まん", n)
+        for ((r, v) in m) if (v != "0" && !r.endsWith("っ") && !r.endsWith("よ")) mm.putIfAbsent(r + "まん", v.toInt())
         mm["まん"] = 1; mm["いちまん"] = 1
         man = mm
         maxLen = (m.keys + mm.keys).maxOf { it.length } + 12

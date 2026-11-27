@@ -669,7 +669,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         clipboard.addPrimaryClipChangedListener(clipListener)
         io.execute { val loaded = ClipStore.load(applicationContext); main.post { clips.addAll(0, loaded.filter { l -> clips.none { it.text == l.text } }) } }
         log = CommitLog(this)
-        worker.execute { runCatching { Engine.get(applicationContext); Engine.glide(applicationContext) } }
+        worker.execute { runCatching { Engine.get(applicationContext); dev.flickime.engine.JaNumbers.small.size; Engine.glide(applicationContext) } }
     }
 
     // ---- floating keyboard (Gboard-style) ----
