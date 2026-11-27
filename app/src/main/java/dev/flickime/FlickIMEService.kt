@@ -421,11 +421,11 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         if (badReport != null) { finishBadReport(confirmed = true); return }
         if (reading.isEmpty() || candidates.isEmpty()) return
         if (!Prefs.loggingEnabled(this)) {
-            android.widget.Toast.makeText(this, "設定でログをオンにすると記録できます", android.widget.Toast.LENGTH_SHORT).show(); return
+            notice("設定でログをオンにすると記録できます"); return
         }
         badReport = BadReport(reading.toString(), compositionContext, candidates.take(8).map { it.surface }, candidatesEngine, compositionStart())
         updateBarButtons()
-        android.widget.Toast.makeText(this, "正しい形で入力して、最後に✓を押してください", android.widget.Toast.LENGTH_LONG).show()
+        notice("正しい形で入力して、最後に✓を押してください")
     }
 
     /** ✓ (or leaving the field): log what is now written where the composition was. */
@@ -465,8 +465,8 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
                 val text = conv.userDict.serialize()
                 io.execute { UserDictStore.save(applicationContext, text) }
             }
-            android.widget.Toast.makeText(this, "「${br.reading}」→「$a」を記録して辞書に登録しました", android.widget.Toast.LENGTH_SHORT).show()
-        } else if (confirmed) android.widget.Toast.makeText(this, if (a.isNullOrEmpty()) "入力が見つからなかったので、候補だけ記録しました" else "記録しました", android.widget.Toast.LENGTH_SHORT).show()
+            notice("「${br.reading}」→「$a」を記録して辞書に登録しました")
+        } else if (confirmed) notice(if (a.isNullOrEmpty()) "入力が見つからなかったので、候補だけ記録しました" else "記録しました")
     }
     private lateinit var snippetPanel: ScrollView
     private lateinit var snippetList: LinearLayout
@@ -819,7 +819,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
             // one registered text, typed straight away (set it in the settings screen)
             setOnClickListener {
                 val t = SnippetStore.load(this@FlickIMEService).firstOrNull()
-                if (t.isNullOrEmpty()) android.widget.Toast.makeText(this@FlickIMEService, "設定画面の「定型文」で登録してください", android.widget.Toast.LENGTH_SHORT).show()
+                if (t.isNullOrEmpty()) notice("設定画面の「定型文」で登録してください")
                 else { if (reading.isNotEmpty()) commitKana(); currentInputConnection?.commitText(t, 1) }
             }
         }
@@ -837,6 +837,31 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
             setMargins(0, (6 * dp).toInt(), (6 * dp).toInt(), (6 * dp).toInt())
         })
         bar.addView(candScroll, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+        // messages and confirmations shown in place of the candidates (a toast from the keyboard may not show at all)
+        noticeText = TextView(this).apply {
+            gravity = Gravity.CENTER_VERTICAL; isSingleLine = true
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f); setTextColor(fgColor())
+            setPadding((12 * dp).toInt(), 0, (8 * dp).toInt(), 0)
+        }
+        noticeAction = TextView(this).apply {
+            gravity = Gravity.CENTER; setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f); setTextColor(fgColor())
+            setPadding((14 * dp).toInt(), 0, (14 * dp).toInt(), 0)
+            setBackgroundColor(theme.selectedBg)
+        }
+        val noticeClose = TextView(this).apply {
+            text = "×"; gravity = Gravity.CENTER; setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f); setTextColor(fgColor())
+            setOnClickListener { notice(null) }
+        }
+        noticeRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; visibility = View.GONE
+            addView(noticeText, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+            addView(noticeAction, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.MATCH_PARENT).apply {
+                setMargins(0, (6 * dp).toInt(), (4 * dp).toInt(), (6 * dp).toInt())
+            })
+            addView(noticeClose, LinearLayout.LayoutParams((40 * dp).toInt(), LinearLayout.LayoutParams.MATCH_PARENT))
+        }
+        bar.addView(noticeRow, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
         expandButton = TextView(this).apply {
             text = "▾"; gravity = Gravity.CENTER
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
@@ -924,8 +949,42 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         setOnLongClickListener { candidates.getOrNull(i)?.let { forgetCandidate(it) }; true }
     }
 
-    /** Long-press: remove a prediction, or a learned word (Gboard's "候補から削除"). */
+    private lateinit var noticeRow: LinearLayout
+    private lateinit var noticeText: TextView
+    private lateinit var noticeAction: TextView
+    private val hideNotice = Runnable { notice(null) }
+
+    /** A message in the candidate bar (null hides it); with [action], a button that runs [onAction]. */
+    private fun notice(text: String?, action: String? = null, onAction: (() -> Unit)? = null) {
+        if (!::noticeRow.isInitialized) return
+        main.removeCallbacks(hideNotice)
+        if (text == null) {
+            if (noticeRow.visibility != View.VISIBLE) return
+            noticeRow.visibility = View.GONE; candScroll.visibility = View.VISIBLE
+            updateBarButtons()
+            return
+        }
+        noticeText.text = text
+        noticeAction.visibility = if (action != null) View.VISIBLE else View.GONE
+        noticeAction.text = action
+        noticeAction.setOnClickListener { notice(null); onAction?.invoke() }
+        noticeRow.visibility = View.VISIBLE; candScroll.visibility = View.GONE; clipChip.visibility = View.GONE
+        main.postDelayed(hideNotice, if (action != null) 6000 else 2500)
+    }
+
+    /** Long-press a candidate: asks in the bar, then removes it (Gboard's "候補から削除"). */
     private fun forgetCandidate(c: Candidate) {
+        if (glideMode) return
+        candScroll.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+        val conv = Engine.converter
+        val r = c.fullReading ?: reading.substring(0, c.consumed.coerceAtMost(reading.length))
+        val removable = typeSuggest || c.kind == Candidate.Kind.PREDICTION ||
+            conv != null && (conv.history.count(r, c.surface) > 0 || conv.userDict.lookup(r).any { it.surface == c.surface })
+        if (!removable) { notice("「${c.surface}」は普通の変換候補なので消せません（消せるのは予測と学習した語）"); return }
+        notice("「${c.surface}」を候補から消す？", "消す") { removeCandidate(c) }
+    }
+
+    private fun removeCandidate(c: Candidate) {
         if (glideMode) return
         if (typeSuggest) {
             // an English suggestion while typing: not suggested again
@@ -936,7 +995,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
                 val text = g.serialize()
                 io.execute { GlideStore.save(ctx, text) }
             }
-            android.widget.Toast.makeText(this, "「${c.surface}」を候補に出さないようにしました", android.widget.Toast.LENGTH_SHORT).show()
+            notice("「${c.surface}」を候補に出さないようにしました")
             showSuggestions(candidates.filter { it !== c }.map { it.surface })
             return
         }
@@ -947,20 +1006,20 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
             conv.history.block(r, c.surface)
             historyDirty = true
             saveHistory()
-            android.widget.Toast.makeText(this, "「${c.surface}」を予測に出さないようにしました", android.widget.Toast.LENGTH_SHORT).show()
+            notice("「${c.surface}」を予測に出さないようにしました")
             refresh()
             return
         }
         val fromHistory = conv.history.forget(r, c.surface)
         val fromDict = conv.userDict.remove(r, c.surface)
         if (!fromHistory && !fromDict) {
-            android.widget.Toast.makeText(this, "学習した候補ではありません", android.widget.Toast.LENGTH_SHORT).show()
+            notice("学習した候補ではありません")
             return
         }
         historyDirty = true
         saveHistory()
         if (fromDict) { val text = conv.userDict.serialize(); io.execute { UserDictStore.save(applicationContext, text) } }
-        android.widget.Toast.makeText(this, "「${c.surface}」を候補から削除しました", android.widget.Toast.LENGTH_SHORT).show()
+        notice("「${c.surface}」を候補から削除しました")
         refresh()
     }
 
@@ -1031,6 +1090,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
+        notice(null)
         super.onFinishInputView(finishingInput)
         if (reading.isNotEmpty()) commitKana()
         finishCorrection()
@@ -1134,6 +1194,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     // ---- KeyboardView.Listener ----
 
     override fun onText(text: String) {
+        notice(null)
         endGlide()
         finishCorrection()
         if (cursorLeftComposition()) dropComposition()
@@ -1153,6 +1214,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onAction(action: Action) {
+        if (action != Action.Report) notice(null)
         val ic = currentInputConnection ?: return
         if (glideMode && action == Action.Backspace) {
             // like Gboard: backspace right after a glide removes the whole word,
