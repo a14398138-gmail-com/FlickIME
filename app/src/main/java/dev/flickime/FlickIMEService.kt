@@ -794,6 +794,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         candRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         candScroll = SwipeHorizontalScrollView(this).apply {
+            suppress = { dragging != null }
             isHorizontalScrollBarEnabled = false
             addView(candRow)
             onSwipeUp = { if (candidates.isNotEmpty()) { expand(true); true } else false }
@@ -882,6 +883,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         flow = FlowLayout(this).apply { rowHeight = (48 * dp).toInt() }
         if (theme.glass) flow.setBackgroundColor(Color.argb(if (night) 60 else 90, 255, 255, 255))
         panel = SwipeScrollView(this).apply {
+            suppress = { dragging != null }
             addView(flow)
             visibility = View.GONE
             // pulling down while already at the top closes the panel; otherwise it just scrolls
@@ -905,6 +907,22 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         body.addView(emojiPanel, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, (4 * 58 * dp).toInt()))
         emojiOpen = false
         root.addView(body)
+        bodyFrame = body
+        // Gboard-style removal: long-press a candidate, drag it onto the bin
+        trashView = TextView(this).apply {
+            text = "🗑\nここで離すと削除"; gravity = Gravity.CENTER
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); setTextColor(fgColor())
+            visibility = View.GONE; elevation = 8 * dp
+        }
+        body.addView(trashView, FrameLayout.LayoutParams((150 * dp).toInt(), (80 * dp).toInt(), Gravity.CENTER_HORIZONTAL or Gravity.TOP).apply { topMargin = (14 * dp).toInt() })
+        dragChip = TextView(this).apply {
+            gravity = Gravity.CENTER; isSingleLine = true
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f); setTextColor(fgColor())
+            setPadding((14 * dp).toInt(), (8 * dp).toInt(), (14 * dp).toInt(), (8 * dp).toInt())
+            background = android.graphics.drawable.GradientDrawable().apply { cornerRadius = 10 * dp; setColor(theme.selectedBg) }
+            visibility = View.GONE; elevation = 12 * dp
+        }
+        body.addView(dragChip, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT))
         // Android 15 draws the IME edge-to-edge: keep keys above the navigation bar
         // (the strip with the system ∨ / 🌐 buttons), the way Gboard does.
         root.setOnApplyWindowInsetsListener { _, insets -> applyNavInset(insets); insets }
@@ -946,7 +964,73 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         if (highlight) setBackgroundColor(theme.selectedBg)
         setOnClickListener { expand(false); commitCandidate(i) }
         // bar views are reused between keystrokes: look the candidate up by position at press time
-        setOnLongClickListener { candidates.getOrNull(i)?.let { forgetCandidate(it) }; true }
+        setOnLongClickListener { v -> candidates.getOrNull(i)?.let { startCandidateDrag(it, v) }; true }
+        setOnTouchListener { _, e -> dragging != null && onCandidateDrag(e) }
+    }
+
+    // ---- drag a candidate to the bin ----
+    private var bodyFrame: FrameLayout? = null
+    private lateinit var trashView: TextView
+    private lateinit var dragChip: TextView
+    private var dragging: Candidate? = null
+    private var overTrash = false
+
+    private fun trashBg(hot: Boolean) = android.graphics.drawable.GradientDrawable().apply {
+        cornerRadius = 16 * dp
+        setColor(if (hot) Color.argb(230, 220, 60, 60) else Color.argb(200, Color.red(theme.selectedBg), Color.green(theme.selectedBg), Color.blue(theme.selectedBg)))
+        setStroke((2 * dp).toInt(), if (hot) Color.WHITE else Color.argb(120, Color.red(theme.text), Color.green(theme.text), Color.blue(theme.text)))
+    }
+
+    private fun startCandidateDrag(c: Candidate, v: View) {
+        if (glideMode || bodyFrame == null) return
+        val conv = Engine.converter
+        val r = c.fullReading ?: reading.substring(0, c.consumed.coerceAtMost(reading.length))
+        val removable = typeSuggest || c.kind == Candidate.Kind.PREDICTION ||
+            conv != null && (conv.history.count(r, c.surface) > 0 || conv.userDict.lookup(r).any { it.surface == c.surface })
+        v.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+        if (!removable) { notice("「${c.surface}」は普通の変換候補なので消せません（消せるのは予測と学習した語）"); return }
+        v.parent?.requestDisallowInterceptTouchEvent(true)
+        dragging = c; overTrash = false
+        dragChip.text = c.surface; dragChip.visibility = View.VISIBLE
+        trashView.background = trashBg(false); trashView.visibility = View.VISIBLE
+        // the chip starts where the candidate is
+        val loc = IntArray(2); v.getLocationOnScreen(loc)
+        moveChip(loc[0] + v.width / 2f, loc[1] + v.height / 2f)
+    }
+
+    private fun moveChip(rawX: Float, rawY: Float) {
+        val body = bodyFrame ?: return
+        val bl = IntArray(2); body.getLocationOnScreen(bl)
+        dragChip.translationX = rawX - bl[0] - dragChip.width / 2f
+        dragChip.translationY = rawY - bl[1] - dragChip.height / 2f - 24 * dp // above the finger
+        val tl = IntArray(2); trashView.getLocationOnScreen(tl)
+        val m = 16 * dp
+        val hot = rawX >= tl[0] - m && rawX <= tl[0] + trashView.width + m && rawY >= tl[1] - m && rawY <= tl[1] + trashView.height + m
+        if (hot != overTrash) {
+            overTrash = hot
+            trashView.background = trashBg(hot)
+            trashView.animate().scaleX(if (hot) 1.12f else 1f).scaleY(if (hot) 1.12f else 1f).setDuration(90).start()
+            if (hot) trashView.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+        }
+    }
+
+    private fun onCandidateDrag(e: MotionEvent): Boolean {
+        val c = dragging ?: return false
+        when (e.actionMasked) {
+            MotionEvent.ACTION_MOVE -> moveChip(e.rawX, e.rawY)
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                val drop = e.actionMasked == MotionEvent.ACTION_UP && overTrash
+                endCandidateDrag()
+                if (drop) removeCandidate(c)
+            }
+        }
+        return true
+    }
+
+    private fun endCandidateDrag() {
+        dragging = null; overTrash = false
+        if (::dragChip.isInitialized) dragChip.visibility = View.GONE
+        if (::trashView.isInitialized) { trashView.visibility = View.GONE; trashView.scaleX = 1f; trashView.scaleY = 1f }
     }
 
     private lateinit var noticeRow: LinearLayout
@@ -970,18 +1054,6 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         noticeAction.setOnClickListener { notice(null); onAction?.invoke() }
         noticeRow.visibility = View.VISIBLE; candScroll.visibility = View.GONE; clipChip.visibility = View.GONE
         main.postDelayed(hideNotice, if (action != null) 6000 else 2500)
-    }
-
-    /** Long-press a candidate: asks in the bar, then removes it (Gboard's "候補から削除"). */
-    private fun forgetCandidate(c: Candidate) {
-        if (glideMode) return
-        candScroll.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
-        val conv = Engine.converter
-        val r = c.fullReading ?: reading.substring(0, c.consumed.coerceAtMost(reading.length))
-        val removable = typeSuggest || c.kind == Candidate.Kind.PREDICTION ||
-            conv != null && (conv.history.count(r, c.surface) > 0 || conv.userDict.lookup(r).any { it.surface == c.surface })
-        if (!removable) { notice("「${c.surface}」は普通の変換候補なので消せません（消せるのは予測と学習した語）"); return }
-        notice("「${c.surface}」を候補から消す？", "消す") { removeCandidate(c) }
     }
 
     private fun removeCandidate(c: Candidate) {
@@ -1090,7 +1162,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
-        notice(null)
+        notice(null); endCandidateDrag()
         super.onFinishInputView(finishingInput)
         if (reading.isNotEmpty()) commitKana()
         finishCorrection()

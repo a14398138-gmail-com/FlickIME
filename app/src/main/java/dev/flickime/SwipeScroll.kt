@@ -43,7 +43,11 @@ class SwipeHorizontalScrollView(context: Context) : HorizontalScrollView(context
     var onSwipeUp: (() -> Boolean)? by t::onUp
     var onSwipeDown: (() -> Boolean)? by t::onDown
 
+    /** While true (a candidate is being dragged to the bin) swipes are not detected. */
+    var suppress: () -> Boolean = { false }
+
     override fun dispatchTouchEvent(e: MotionEvent): Boolean {
+        if (suppress()) return super.dispatchTouchEvent(e)
         val was = t.fired
         if (t.track(e)) {
             if (!was) { val c = cancelOf(e); super.dispatchTouchEvent(c); c.recycle() }
@@ -58,7 +62,11 @@ class SwipeScrollView(context: Context) : ScrollView(context) {
     var onSwipeUp: (() -> Boolean)? by t::onUp
     var onSwipeDown: (() -> Boolean)? by t::onDown
 
+    /** While true (a candidate is being dragged to the bin) swipes are not detected. */
+    var suppress: () -> Boolean = { false }
+
     override fun dispatchTouchEvent(e: MotionEvent): Boolean {
+        if (suppress()) return super.dispatchTouchEvent(e)
         val was = t.fired
         if (t.track(e)) {
             if (!was) { val c = cancelOf(e); super.dispatchTouchEvent(c); c.recycle() }
