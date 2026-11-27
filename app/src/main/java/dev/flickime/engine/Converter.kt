@@ -671,7 +671,9 @@ class Converter(
         val preds = predictions(reading, context)
         // other whole-sentence readings when the reading spans several words
         fun addAltSentences() { if (path.size >= 2) ranked.drop(1).filter { it !== lead }.take(2).forEach { add(Candidate(it.surface, n, Candidate.Kind.SENTENCE, it.segments)) } }
-        // the reading is fully spelled: exact conversions come before the guesses about what may follow
+        // nothing converts the reading (ありが, よろし): a word still being typed, so its two best completions
+        // come right after it; otherwise the reading is fully spelled and exact conversions come first
+        if (top.surface == reading || top.surface == Kana.toKatakana(reading)) preds.take(2).forEach { add(it) }
         addAltSentences()
 
         val own = preds.filter { history.count(it.fullReading!!, it.surface) > 0 || userDict.lookup(it.fullReading).any { w -> w.surface == it.surface } }
@@ -800,7 +802,7 @@ class Converter(
             // the user's own rare words come from their history instead
             .map { (r, sf, cost) -> Triple(r, sf, if (lm == null || lm.knows(sf + '\u0001' + r)) cost else cost + 1500) }
             .filter { it.third < (if (one) 6000 else 7500) }
-            .filter { (r, s, _) -> !s.all { it in 'ぁ'..'ゖ' } || r.length - reading.length >= 2 }
+            .filter { (r, s, _) -> !s.all { it in 'ぁ'..'ゖ' } || r.length - reading.length >= (if (reading.length >= 3) 1 else 2) }
             .sortedBy { (r, _, cost) -> cost + 350 * (r.length - reading.length) }
             .take(8)
         if (one) synchronized(firstCharPredictions) { firstCharPredictions[reading] = res }
