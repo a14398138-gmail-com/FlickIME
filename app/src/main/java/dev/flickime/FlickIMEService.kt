@@ -920,7 +920,8 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         isSingleLine = true
         if (highlight) setBackgroundColor(theme.selectedBg)
         setOnClickListener { expand(false); commitCandidate(i) }
-        setOnLongClickListener { forgetCandidate(c); true }
+        // bar views are reused between keystrokes: look the candidate up by position at press time
+        setOnLongClickListener { candidates.getOrNull(i)?.let { forgetCandidate(it) }; true }
     }
 
     /** Long-press: remove a prediction, or a learned word (Gboard's "候補から削除"). */
