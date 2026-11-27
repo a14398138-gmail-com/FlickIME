@@ -923,11 +923,33 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         setOnLongClickListener { forgetCandidate(c); true }
     }
 
-    /** Long-press: remove a learned word / prediction (Gboard's "候補から削除"). */
+    /** Long-press: remove a prediction, or a learned word (Gboard's "候補から削除"). */
     private fun forgetCandidate(c: Candidate) {
-        val conv = Engine.converter ?: return
         if (glideMode) return
+        if (typeSuggest) {
+            // an English suggestion while typing: not suggested again
+            val ctx = applicationContext
+            worker.execute {
+                val g = runCatching { Engine.glide(ctx) }.getOrNull() ?: return@execute
+                g.block(c.surface)
+                val text = g.serialize()
+                io.execute { GlideStore.save(ctx, text) }
+            }
+            android.widget.Toast.makeText(this, "「${c.surface}」を候補に出さないようにしました", android.widget.Toast.LENGTH_SHORT).show()
+            showSuggestions(candidates.filter { it !== c }.map { it.surface })
+            return
+        }
+        val conv = Engine.converter ?: return
         val r = c.fullReading ?: reading.substring(0, c.consumed.coerceAtMost(reading.length))
+        if (c.kind == Candidate.Kind.PREDICTION) {
+            conv.history.forget(r, c.surface)
+            conv.history.block(r, c.surface)
+            historyDirty = true
+            saveHistory()
+            android.widget.Toast.makeText(this, "「${c.surface}」を予測に出さないようにしました", android.widget.Toast.LENGTH_SHORT).show()
+            refresh()
+            return
+        }
         val fromHistory = conv.history.forget(r, c.surface)
         val fromDict = conv.userDict.remove(r, c.surface)
         if (!fromHistory && !fromDict) {

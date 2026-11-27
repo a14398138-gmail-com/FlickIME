@@ -176,4 +176,17 @@ class ConverterTest {
         assertEquals(target, top("かんじ"))
         conv.history.clear()
     }
+
+    @Test fun removedPredictionStaysRemoved() {
+        conv.history.clear()
+        val before = conv.predictions("ありが").map { it.surface to it.fullReading!! }
+        val (s, r) = before.first { it.first == "ありがとう" }
+        conv.history.block(r, s)
+        assertTrue(conv.predictions("ありが").none { it.surface == s })
+        // still convertible when typed out, and kept across save / load
+        assertTrue(conv.candidates("ありがとう").any { it.surface == s })
+        val h = UserHistory().apply { load(conv.history.serialize()) }
+        assertTrue(h.isBlocked(r, s))
+        conv.history.clear()
+    }
 }

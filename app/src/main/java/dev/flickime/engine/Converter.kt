@@ -28,6 +28,8 @@ class UserHistory {
     private val neg = HashMap<String, Int>()
     private val pairs = HashMap<String, Int>()
     private val readings = HashSet<String>()
+    /** predictions the user removed (long-press): never suggested again, still convertible by typing them out */
+    private val blocked = HashSet<String>()
     /** reading -> surfaces with a positive weight, sorted by reading for prefix lookups */
     private val byReading = java.util.TreeMap<String, MutableSet<String>>()
 
@@ -60,6 +62,14 @@ class UserHistory {
     }
 
     @Synchronized fun pair(w1: String, w2: String) = pairs["$w1\t$w2"] ?: 0
+
+    @Synchronized fun isBlocked(reading: String, surface: String) = blocked.isNotEmpty() && key(reading, surface) in blocked
+
+    /** Long-press → remove a prediction (Gboard-style): it is not predicted again. */
+    @Synchronized fun block(reading: String, surface: String) {
+        if (!ok(reading, surface)) return
+        blocked.add(key(reading, surface)); version++
+    }
 
     /**
      * Surfaces the user deliberately picked for exactly [reading] (weight >= 2), most picked first.
@@ -107,7 +117,7 @@ class UserHistory {
         version++
     }
 
-    @Synchronized fun clear() { pos.clear(); neg.clear(); pairs.clear(); readings.clear(); byReading.clear(); version++ }
+    @Synchronized fun clear() { pos.clear(); neg.clear(); pairs.clear(); readings.clear(); byReading.clear(); blocked.clear(); version++ }
 
     /** Drops everything learned for this word (long-press → delete on a candidate). */
     @Synchronized fun forget(reading: String, surface: String): Boolean {
@@ -148,6 +158,7 @@ class UserHistory {
         neg.forEach { (k, v) -> append("n\t").append(k).append('\t').append(v).append('\n') }
         val keepPairs = if (pairs.size > 60000) pairs.filterValues { it > 1 } else pairs
         keepPairs.forEach { (k, v) -> append("b\t").append(k).append('\t').append(v).append('\n') }
+        blocked.forEach { k -> append("x\t").append(k).append("\t1\n") }
     }
 
     @Synchronized fun load(text: String) {
@@ -162,6 +173,7 @@ class UserHistory {
                     "p" -> { pos[key(p[1], p[2])] = v; readings.add(p[1]); byReading.getOrPut(p[1]) { LinkedHashSet() }.add(p[2]) }
                     "n" -> { neg[key(p[1], p[2])] = v; readings.add(p[1]) }
                     "b" -> pairs["${p[1]}\t${p[2]}"] = v
+                    "x" -> blocked.add(key(p[1], p[2]))
                 }
             }
         } else {
@@ -727,6 +739,7 @@ class Converter(
         if (reading.isEmpty()) return emptyList()
         val out = LinkedHashMap<String, Candidate>()
         fun add(r: String, s: String) {
+            if (history.isBlocked(r, s)) return
             if (out.size < limit && s !in out) out[s] = Candidate(s, reading.length, Candidate.Kind.PREDICTION, fullReading = r)
         }
         history.completions(reading, limit).forEach { (r, s, _) -> add(r, s) }

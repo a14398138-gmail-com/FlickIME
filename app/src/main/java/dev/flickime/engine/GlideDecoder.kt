@@ -13,6 +13,10 @@ class GlideDecoder(words: List<String>) {
     private val rank = HashMap<String, Int>()
     /** All words, sorted, for prefix completion while typing */
     private val sortedWords = java.util.TreeSet<String>()
+    /** suggestions the user removed (long-press) */
+    private val blocked = HashSet<String>()
+
+    @Synchronized fun block(word: String) { blocked.add(word.lowercase()) }
     private val byEnds = HashMap<String, MutableList<String>>()
     /** lowercase key -> how the user wrote it (e.g. "flickime" -> "FlickIME") */
     private val display = HashMap<String, String>()
@@ -151,9 +155,9 @@ class GlideDecoder(words: List<String>) {
         prevWord = previous.lowercase()
         val sub = sortedWords.subSet(p, true, p + '\uffff', false)
         val scored = ArrayList<Pair<String, Float>>()
-        for (w in sub) scored.add(w to FREQ_W * ln((rank[w] ?: 40000) + 10f) - personal(w) + 0.02f * (w.length - p.length))
+        for (w in sub) if (w !in blocked) scored.add(w to FREQ_W * ln((rank[w] ?: 40000) + 10f) - personal(w) + 0.02f * (w.length - p.length))
         val out = scored.sortedBy { it.second }.map { it.first }.take(limit).toMutableList()
-        if (p in rank) { out.remove(p); out.add(0, p) }
+        if (p in rank && p !in blocked) { out.remove(p); out.add(0, p) }
         return out.take(limit).map { display[it] ?: it }
     }
 
@@ -161,7 +165,7 @@ class GlideDecoder(words: List<String>) {
     @Synchronized fun nextWords(previous: String, limit: Int = 5): List<String> {
         val pv = previous.lowercase()
         if (pv.isEmpty()) return emptyList()
-        return pairs.entries.filter { it.key.startsWith("$pv ") && it.value >= 2 }
+        return pairs.entries.filter { it.key.startsWith("$pv ") && it.value >= 2 && it.key.substringAfter(' ') !in blocked }
             .sortedByDescending { it.value }.take(limit).map { it.key.substringAfter(' ').let { w -> display[w] ?: w } }
     }
 
@@ -209,6 +213,7 @@ class GlideDecoder(words: List<String>) {
         append("B\t").append(biasX).append('\t').append(biasY).append('\n')
         counts.forEach { (w, c) -> append("U\t").append(w).append('\t').append(c).append('\n') }
         pairs.forEach { (k, c) -> append("P\t").append(k).append('\t').append(c).append('\n') }
+        blocked.forEach { append("X\t").append(it).append('\n') }
     }
 
     @Synchronized fun load(text: String) {
@@ -218,6 +223,7 @@ class GlideDecoder(words: List<String>) {
                 "B" -> if (f.size == 3) { biasX = f[1].toFloatOrNull() ?: 0f; biasY = f[2].toFloatOrNull() ?: 0f }
                 "U" -> if (f.size == 3) { counts[f[1]] = f[2].toIntOrNull() ?: 0; if (!rank.containsKey(f[1])) put(f[1], USER_RANK) }
                 "P" -> if (f.size == 3) pairs[f[1]] = f[2].toIntOrNull() ?: 0
+                "X" -> if (f.size == 2) blocked.add(f[1])
             }
         }
     }
