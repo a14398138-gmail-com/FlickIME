@@ -187,6 +187,11 @@ class Converter(
     /** POS ids allowed as dictionary predictions (assets/predict_ids.txt); null = all. */
     private val predictIds: Set<Int>? = null,
 ) {
+    /** Kana numbers become digit nodes in the lattice ([JaNumbers]); cost = numberCost + numberCostPerChar per kana. */
+    var numbers = true
+    var numberCost = 4000
+    var numberCostPerChar = 0
+
     /** Cost of a bare one-kana node that keeps the lattice connected (tuning knob). */
     var unkNodeCost = 12000
 
@@ -287,6 +292,11 @@ class Converter(
             }
             punctuation(reading[i])?.let { (id, cost) ->
                 place(Node(i, i + 1, -1, reading[i].toString(), id, id, cost))
+            }
+            // numbers read out in kana, as digits (ごげん → 5限); the connection to counters does the rest
+            if (numbers) for ((len, digits) in JaNumbers.at(reading, i)) {
+                val native = digits.endsWith("つ")
+                place(Node(i, i + len, -1, digits, NUMBER_ID, if (native) COUNTER_ID else NUMBER_ID, numberCost + numberCostPerChar * len))
             }
             val maxLen = minOf(dict.maxReadingLen, n - i)
             for (len in 1..maxLen) {
@@ -485,6 +495,8 @@ class Converter(
                 userDict.lookup(r).forEach { ways.add(len to it.surface) }
                 english[r]?.forEach { ways.add(len to it) }
                 symbols[r]?.forEach { ways.add(len to it) }
+                JaNumbers.small[r]?.let { ways.add(len to it); ways.add(len to it.map { c -> if (c in '0'..'9') c + 0xFEE0 else c }.joinToString("")) }
+                JaNumbers.words[r]?.let { ways.add(len to it) }
                 // single kanji by their readings: a new word zenz knows but the dictionary lacks (院進, 鬼滅)
                 // is still checked character by character
                 if (len <= 4) kanjiOf(r).forEach { ways.add(len to it) }
@@ -525,8 +537,71 @@ class Converter(
                 .sortedBy { it.score }
                 .take(nbestKeep)
         }.ifEmpty { listOf(Sentence(listOf(reading.length to reading), 0)) }
-        cache[key] = result
-        return result
+        val withDigits = if (numbers) withDigitVariants(result, reading) else result
+        cache[key] = withDigits
+        return withDigits
+    }
+
+    /** 一時 / 三桁 / 十八 → 1時 / 3桁 / 18: each sentence with kanji numbers gets a digit twin (just behind it). */
+    private fun withDigitVariants(list: List<Sentence>, reading: String): List<Sentence> {
+        var out: ArrayList<Sentence>? = null
+        val seen = HashSet<String>()
+        list.forEach { seen.add(it.surface) }
+        for ((idx, sen) in list.withIndex()) {
+            if (idx >= 6) break
+            val v = digitVariant(sen, reading) ?: continue
+            if (!seen.add(v.surface)) continue
+            if (out == null) out = ArrayList(list)
+            out.add(v)
+        }
+        return out?.sortedBy { it.score } ?: list
+    }
+
+    private fun isCounter(reading: String, surface: String): Boolean {
+        val range = dict.range(reading, 0, reading.length) ?: return false
+        return range.any { dict.lid(it) in COUNTER_IDS && dict.surface(it) == surface }
+    }
+
+    private fun digitVariant(sen: Sentence, reading: String): Sentence? {
+        val segs = sen.segments
+        var off = 0; var changed = false
+        val out = ArrayList<Pair<Int, String>>(segs.size)
+        for ((k, seg) in segs.withIndex()) {
+            val (len, w) = seg
+            if (off + len > reading.length) return null
+            val r = reading.substring(off, off + len); off += len
+            val run = w.takeWhile { it in KANJI_DIGITS }
+            val value = if (run.isEmpty()) null else kanjiValue(run)
+            if (value == null) { out.add(seg); continue }
+            // the reading must start with that number read out (いち / いっ … for 1)
+            val numLen = (r.length downTo 1).firstOrNull { JaNumbers.small[r.substring(0, it)] == value.toString() }
+            if (numLen == null) { out.add(seg); continue }
+            val rest = w.substring(run.length); val restR = r.substring(numLen)
+            val ok = if (rest.isEmpty()) restR.isEmpty() && (k == segs.size - 1 || segs[k + 1].let { (nl, nw) -> isCounter(reading.substring(off, off + nl), nw) } || segs[k + 1].second.all { it in 'ぁ'..'ゖ' })
+                else isCounter(restR, rest)
+            if (!ok) { out.add(seg); continue }
+            out.add(len to value.toString() + rest); changed = true
+        }
+        return if (changed) Sentence(out, sen.score + DIGIT_VARIANT_COST) else null
+    }
+
+    /** 一 .. 九千九百九十九 (and 〇 / 零) → value; null for anything else. */
+    private fun kanjiValue(s: String): Int? {
+        if (s == "〇" || s == "零") return 0
+        var total = 0; var cur = -1
+        for (c in s) {
+            val d = KANJI_DIGITS.indexOf(c)
+            when {
+                d in 1..9 -> { if (cur != -1) return null; cur = d }
+                c == '十' || c == '百' || c == '千' -> {
+                    val unit = when (c) { '十' -> 10; '百' -> 100; else -> 1000 }
+                    if (total % (unit * 10) != 0 && total != 0 && total < unit * 10) return null
+                    total += (if (cur == -1) 1 else cur) * unit; cur = -1
+                }
+                else -> return null
+            }
+        }
+        return total + (if (cur == -1) 0 else cur)
     }
 
     /** Best segmentation. Returns list of (readingLen, surface). */
@@ -774,6 +849,11 @@ class Converter(
 
     companion object {
         const val UNK_ID = 1851 // 名詞,一般
+        const val NUMBER_ID = 2044 // 名詞,数,アラビア数字
+        const val COUNTER_ID = 2011 // 名詞,接尾,助数詞
+        val COUNTER_IDS = 2011..2018
+        const val KANJI_DIGITS = "〇一二三四五六七八九十百千"
+        const val DIGIT_VARIANT_COST = 300
         const val USER_COST = 3000
         const val DEFAULT_LM_WEIGHT = 0.35f
         const val NBEST = 8
