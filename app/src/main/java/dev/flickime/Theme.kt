@@ -165,7 +165,17 @@ class GlassBackdrop(
 object BackgroundImage {
     private fun file(c: Context) = java.io.File(c.filesDir, "background.jpg")
 
-    fun load(c: Context): Bitmap? = file(c).takeIf { it.exists() }?.let { BitmapFactory.decodeFile(it.path) }
+    @Volatile private var cached: Pair<Long, Bitmap?>? = null
+
+    /** The picture, decoded once per change (a rebuilt keyboard must not wait for a JPEG decode). */
+    fun load(c: Context): Bitmap? {
+        val f = file(c)
+        val stamp = if (f.exists()) f.lastModified() * 31 + f.length() else 0L
+        cached?.let { (k, b) -> if (k == stamp) return b }
+        val b = if (stamp == 0L) null else BitmapFactory.decodeFile(f.path)
+        cached = stamp to b
+        return b
+    }
 
     fun clear(c: Context) { file(c).delete(); Prefs.touchBackground(c) }
 

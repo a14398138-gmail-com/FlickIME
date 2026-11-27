@@ -84,6 +84,9 @@ object Prefs {
     private fun sfx(c: Context) = if (land(c)) "_land" else ""
     fun floating(c: Context) = p(c).getBoolean("floating" + sfx(c), land(c))
     fun setFloating(c: Context, v: Boolean) = p(c).edit().putBoolean("floating" + sfx(c), v).apply()
+    /** Navigation bar height last seen (px), per orientation: the first frame of a new keyboard uses it. */
+    fun navInset(c: Context, landscape: Boolean) = p(c).getInt(if (landscape) "nav_inset_l" else "nav_inset_p", -1)
+    fun setNavInset(c: Context, landscape: Boolean, v: Int) = p(c).edit().putInt(if (landscape) "nav_inset_l" else "nav_inset_p", v).apply()
     fun floatPos(c: Context) = p(c).getFloat("float_x" + sfx(c), -1f) to p(c).getFloat("float_y" + sfx(c), -1f)
     fun setFloatPos(c: Context, x: Float, y: Float) =
         p(c).edit().putFloat("float_x" + sfx(c), x).putFloat("float_y" + sfx(c), y).apply()

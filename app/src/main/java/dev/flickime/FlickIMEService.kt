@@ -663,6 +663,8 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
 
     override fun onCreate() {
         super.onCreate()
+        // decode the background picture before the first show needs it
+        worker.execute { runCatching { BackgroundImage.load(applicationContext) } }
         if (Prefs.zenzEnabled(this)) zenzWorker.execute { Engine.loadZenz(applicationContext) }
         clipboard.addPrimaryClipChangedListener(clipListener)
         io.execute { val loaded = ClipStore.load(applicationContext); main.post { clips.addAll(0, loaded.filter { l -> clips.none { it.text == l.text } }) } }
@@ -881,6 +883,12 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         // Android 15 draws the IME edge-to-edge: keep keys above the navigation bar
         // (the strip with the system ∨ / 🌐 buttons), the way Gboard does.
         root.setOnApplyWindowInsetsListener { _, insets -> applyNavInset(insets); insets }
+        // the first frame already sits above the navigation bar: use the height seen last time instead of
+        // waiting for the insets (they come a few frames after the window shows)
+        if (!floating) {
+            val known = navInset.takeIf { it > 0 } ?: Prefs.navInset(this, landscape).takeIf { it >= 0 } ?: systemNavBarHeight()
+            if (known > 0) { navInset = known; root.setPadding(0, 0, 0, known) }
+        }
         root.requestApplyInsets()
         applyMode()
         return root
@@ -952,21 +960,29 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
             )
             else -> @Suppress("DEPRECATION") insets.systemWindowInsetBottom
         }
-        if (bottom > 0) navInset = bottom
+        if (bottom > 0 && bottom != navInset) { navInset = bottom; Prefs.setNavInset(this, landscape, bottom) }
         val pad = if (floating) 0 else if (bottom > 0) bottom else navInset
         if (v.paddingBottom != pad) v.setPadding(0, 0, 0, pad)
     }
 
+    /** The system's navigation bar height, for the very first show before any insets were seen. */
+    private fun systemNavBarHeight(): Int {
+        @Suppress("DiscouragedApi")
+        val id = resources.getIdentifier(if (landscape) "navigation_bar_height_landscape" else "navigation_bar_height", "dimen", "android")
+        return if (id > 0) resources.getDimensionPixelSize(id) else 0
+    }
+
     override fun onWindowShown() {
         super.onWindowShown()
-        // insets can arrive late or not at all for a re-shown window: apply what the window has now
-        inputRoot?.let { r -> r.post { applyNavInset(r.rootWindowInsets); r.requestApplyInsets() } }
+        // insets can arrive late or not at all for a re-shown window: apply what the window has now, right away
+        inputRoot?.let { r -> applyNavInset(r.rootWindowInsets); r.requestApplyInsets() }
     }
 
     override fun onStartInputView(info: EditorInfo, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         // rebuild the view when the theme was switched in settings
         if (::theme.isInitialized && themeKey != Prefs.themeKey(this)) setInputView(onCreateInputView())
+        inputRoot?.let { r -> r.rootWindowInsets?.let { applyNavInset(it) } }
         if (!restarting) finishBadReport(confirmed = false)
         typedWord.setLength(0); typedWordValid = false
         resetComposition()
