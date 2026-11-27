@@ -1130,6 +1130,24 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         super.onWindowShown()
         // insets can arrive late or not at all for a re-shown window: apply what the window has now, right away
         inputRoot?.let { r -> applyNavInset(r.rootWindowInsets); r.requestApplyInsets() }
+        redrawAll()
+    }
+
+    /**
+     * A keyboard shown again after a long pause could keep showing its old frame (the picture without its
+     * veil and the glass keys) until a key press redrew it: redraw everything now and once more on the
+     * next frame, when the window has its final size.
+     */
+    private fun redrawAll() {
+        val r = inputRoot ?: return
+        fun once() {
+            r.background?.invalidateSelf()
+            r.invalidate()
+            if (::keyboard.isInitialized) keyboard.invalidate()
+            if (::candRow.isInitialized) candRow.invalidate()
+        }
+        once()
+        r.postOnAnimation { once() }
     }
 
     override fun onStartInputView(info: EditorInfo, restarting: Boolean) {
@@ -1137,6 +1155,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         // rebuild the view when the theme was switched in settings
         if (::theme.isInitialized && themeKey != Prefs.themeKey(this)) setInputView(onCreateInputView())
         inputRoot?.let { r -> r.rootWindowInsets?.let { applyNavInset(it) } }
+        redrawAll()
         if (!restarting) finishBadReport(confirmed = false)
         typedWord.setLength(0); typedWordValid = false
         resetComposition()
