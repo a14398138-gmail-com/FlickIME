@@ -121,6 +121,8 @@ class GlassBackdrop(
     private val translucent: Boolean,
     private val image: Bitmap? = null,
     private val params: GlassParams = GlassParams(),
+    /** [image] already has the veil in its pixels ([BackgroundImage.veiled]) */
+    private val preVeiled: Boolean = false,
 ) : Drawable() {
     private val p = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
 
@@ -134,6 +136,7 @@ class GlassBackdrop(
             val sx = (image.width - sw) / 2; val sy = (image.height - sh) / 2
             p.shader = null
             c.drawBitmap(image, Rect(sx.toInt(), sy.toInt(), (sx + sw).toInt(), (sy + sh).toInt()), b, p)
+            if (preVeiled) return
             p.color = if (night) Color.argb(pct(80, params.veil), 0, 0, 0) else Color.argb(pct(70, params.veil), 255, 255, 255)
             c.drawRect(b, p)
             return
@@ -175,6 +178,23 @@ object BackgroundImage {
         val b = if (stamp == 0L) null else BitmapFactory.decodeFile(f.path)
         cached = stamp to b
         return b
+    }
+
+    @Volatile private var veiledCache: Pair<String, Bitmap>? = null
+
+    /**
+     * The picture with the veil painted into its pixels. The keyboard draws this one: drawn as a picture
+     * plus a translucent layer, a keyboard shown after a pause could come up without the layer.
+     */
+    fun veiled(c: Context, night: Boolean, veilPct: Int): Bitmap? {
+        val src = load(c) ?: return null
+        val key = "${System.identityHashCode(src)}:$night:$veilPct"
+        veiledCache?.let { (k, b) -> if (k == key) return b }
+        val out = src.copy(Bitmap.Config.ARGB_8888, true) ?: return src
+        val a = (if (night) 80 else 70) * veilPct / 100
+        android.graphics.Canvas(out).drawColor(if (night) Color.argb(a.coerceIn(0, 255), 0, 0, 0) else Color.argb(a.coerceIn(0, 255), 255, 255, 255))
+        veiledCache = key to out
+        return out
     }
 
     fun clear(c: Context) { file(c).delete(); Prefs.touchBackground(c) }
