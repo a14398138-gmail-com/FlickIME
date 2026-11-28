@@ -41,7 +41,7 @@ for r in commits:
     if ctx.endswith(r['full_reading']):
         ctx = ctx[: len(ctx) - len(r['full_reading'])]
     events.append({'ts': r['ts'], 'context': ctx[-40:], 'reading': reading, 'surface': surface,
-                   'kind': r['kind'], 'target': target})
+                   'kind': r['kind'], 'target': target, 'rank': r.get('rank', 0)})
 
 n = len(events)
 for i, e in enumerate(events):
@@ -50,11 +50,12 @@ for i, e in enumerate(events):
 with open(os.path.join(out, 'events.jsonl'), 'w', encoding='utf-8') as f:
     for e in events:
         f.write(json.dumps(e, ensure_ascii=False) + '\n')
-# the same as TSV for the JVM test (Android's org.json is a stub there): i split target reading surface kind context
+# the same as TSV for the JVM test (Android's org.json is a stub there): i split target reading surface kind context rank
+# (rank -1 = committed without picking a candidate, e.g. Enter; kind KANA is also the bar's kana candidates)
 def esc(x): return x.replace('\\', '\\\\').replace('\t', '\\t').replace('\n', '\\n')
 with open(os.path.join(out, 'events.tsv'), 'w', encoding='utf-8') as f:
     for e in events:
-        f.write('\t'.join([str(e['i']), e['split'], '1' if e['target'] else '0', esc(e['reading']), esc(e['surface']), e['kind'], esc(e['context'])]) + '\n')
+        f.write('\t'.join([str(e['i']), e['split'], '1' if e['target'] else '0', esc(e['reading']), esc(e['surface']), e['kind'], esc(e['context']), str(e['rank'])]) + '\n')
 # 👎 reports: conversions where no candidate was right, with the answer committed afterwards
 bad = [r for r in rows if r.get('type') == 'bad' and r.get('answer')]
 with open(os.path.join(out, 'bad.tsv'), 'w', encoding='utf-8') as f:

@@ -107,9 +107,13 @@ object ConvEval {
         events.forEachLine { line ->
             val f = line.split('\t')
             val id = f[0]; val reading = unesc(f[3]); val surface = unesc(f[4]); val ctx = unesc(f.getOrElse(6) { "" })
-            // scored: every pick from the candidate list, including the hiragana candidate itself (the author taps it
-            // for words written in kana); KANA = committed with Enter / by moving on, not a pick from the list
-            if (f[1] == split && f[5] != "KANA" && reading.isNotEmpty() && reading.length <= 40) score(s, conv, id, reading, ctx, listOf(surface))
+            // scored: every pick from the candidate list, the kana candidates included. Kind KANA is both the
+            // bar's hiragana / katakana candidates and the reading committed with Enter (rank -1, not a pick):
+            // with the rank column (8th) only rank >= 0 counts; without it a KANA whose surface differs from
+            // the reading (katakana) is a pick, and KANA == reading is left out (cannot tell Enter from a tap)
+            val rank = f.getOrNull(7)?.toIntOrNull()
+            val picked = f[5] != "KANA" || (if (rank != null) rank >= 0 else surface != reading)
+            if (f[1] == split && picked && reading.isNotEmpty() && reading.length <= 40) score(s, conv, id, reading, ctx, listOf(surface))
             val segs = conv.sentences(reading, ctx).firstOrNull { it.surface == surface }?.segments
             if (segs != null && segs.size >= 2) {
                 var off = 0
