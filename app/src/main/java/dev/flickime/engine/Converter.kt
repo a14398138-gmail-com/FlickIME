@@ -761,7 +761,8 @@ class Converter(
 
     var predictionsFirst = true
     var phrasePredictions = true
-    var punctPredictions = true
+    // ？ / ！ endings: off — on the author's full log (11/23–28) they cost ksr 0.1 / 0.3 pt (dev / test)
+    var punctPredictions = false
 
     /** Function words a converted word can grow into while typing (generic grammar, not vocabulary). */
     private val phraseTails = listOf(
