@@ -17,14 +17,17 @@ import java.nio.channels.FileChannel
  *   casual = tools/eval/casual.tsv (same format), fresh history
  *
  * Output (grep CONVEVAL):
- *   vis   = MAIN METRIC: the right candidate is on screen in the bar without scrolling
+ *   one   = MAIN METRIC: share of all commits done with one action after typing the whole reading: Enter when
+ *           the answer is the reading itself (plain hiragana), else a tap on a candidate visible in the bar
+ *   taps  = mean actions to commit (Enter / visible tap 1, ▼ + tap 2, missing 3 + length), over all commits
+ *   then, over the conversions only (answer ≠ reading):
+ *   vis   = the right candidate is on screen in the bar without scrolling
  *           (bar width model: BAR_DP dp, default 380 ≈ POCO F7 minus the ▼ button; each candidate is
  *           12+12 dp padding + 17 dp per full-width character, 9.5 dp per half-width one; a candidate
  *           counts when it is the first or at least 48 dp of it is on screen)
  *   top1  = it is the first candidate
  *   mrr   = mean reciprocal rank (0 when missing)
  *   miss  = not among the candidates at all (has to be fixed by hand)
- *   taps  = mean taps to pick it: 1 if visible, 2 if further (▼ then tap), 3 + length if missing
  *   barN  = mean number of candidates visible in the bar
  */
 object ConvEval {
@@ -61,12 +64,15 @@ object ConvEval {
     }
 
     class Score(val set: String, val split: String) {
-        var n = 0; var top1 = 0; var vis = 0; var miss = 0; var rr = 0.0; var taps = 0; var barN = 0; var ms = 0L
+        /** n = conversions (answer ≠ reading); kana = answers that are the reading itself (one press of Enter) */
+        var n = 0; var kana = 0; var top1 = 0; var vis = 0; var miss = 0; var rr = 0.0; var taps = 0; var barN = 0; var ms = 0L
         val detail = StringBuilder()
-        fun line() = "CONVEVAL set=$set split=$split n=$n vis=${p(vis)} top1=${p(top1)} mrr=${"%.3f".format(rr / maxOf(n, 1))} " +
-            "miss=${p(miss)} taps=${"%.2f".format(taps.toDouble() / maxOf(n, 1))} barN=${"%.1f".format(barN.toDouble() / maxOf(n, 1))} " +
+        private val all get() = n + kana
+        fun line() = "CONVEVAL set=$set split=$split all=$all one=${pa(kana + vis)} taps=${"%.2f".format(taps.toDouble() / maxOf(all, 1))} " +
+            "| conv n=$n vis=${p(vis)} top1=${p(top1)} mrr=${"%.3f".format(rr / maxOf(n, 1))} miss=${p(miss)} barN=${"%.1f".format(barN.toDouble() / maxOf(n, 1))} " +
             "zenz=${if (System.getenv("ZENZ_LIB").isNullOrEmpty()) "off" else "on"} ms/item=${ms / maxOf(n, 1)}"
         private fun p(a: Int) = "%.1f%%".format(100.0 * a / maxOf(n, 1))
+        private fun pa(a: Int) = "%.1f%%".format(100.0 * a / maxOf(all, 1))
     }
 
     /** What the bar shows after the whole reading is typed (the app's refresh(): zenz first, then candidates). */
@@ -76,6 +82,8 @@ object ConvEval {
     }
 
     fun score(s: Score, conv: Converter, id: String, reading: String, ctx: String, answers: Collection<String>) {
+        // wanted exactly what was typed (all hiragana): Enter commits it, whatever the bar shows
+        if (reading in answers) { s.kana++; s.taps += 1; s.detail.append("$id\t$reading\t$reading\tenter\n"); return }
         val t0 = System.nanoTime()
         val cands = shown(conv, reading, ctx)
         s.ms += (System.nanoTime() - t0) / 1_000_000
@@ -107,13 +115,9 @@ object ConvEval {
         events.forEachLine { line ->
             val f = line.split('\t')
             val id = f[0]; val reading = unesc(f[3]); val surface = unesc(f[4]); val ctx = unesc(f.getOrElse(6) { "" })
-            // scored: every pick from the candidate list, the kana candidates included. Kind KANA is both the
-            // bar's hiragana / katakana candidates and the reading committed with Enter (rank -1, not a pick):
-            // with the rank column (8th) only rank >= 0 counts; without it a KANA whose surface differs from
-            // the reading (katakana) is a pick, and KANA == reading is left out (cannot tell Enter from a tap)
-            val rank = f.getOrNull(7)?.toIntOrNull()
-            val picked = f[5] != "KANA" || (if (rank != null) rank >= 0 else surface != reading)
-            if (f[1] == split && picked && reading.isNotEmpty() && reading.length <= 40) score(s, conv, id, reading, ctx, listOf(surface))
+            // every commit counts: what was written plain (= the reading, by Enter or by tapping the kana) costs
+            // one press of Enter whatever the bar shows; anything else is looked up in the candidates
+            if (f[1] == split && reading.isNotEmpty() && reading.length <= 40) score(s, conv, id, reading, ctx, listOf(surface))
             val segs = conv.sentences(reading, ctx).firstOrNull { it.surface == surface }?.segments
             if (segs != null && segs.size >= 2) {
                 var off = 0

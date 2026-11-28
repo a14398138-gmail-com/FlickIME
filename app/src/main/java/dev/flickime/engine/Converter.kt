@@ -669,15 +669,14 @@ class Converter(
         fun add(c: Candidate) { if (out.size < limit && !c.surface.any { it == '\u3099' || it == '\u309a' || it == '゜' && c.surface.length > 1 }) out.putIfAbsent(c.surface to c.consumed, c) }
 
         val ranked = sentences(reading, context)
-        // zenz's first choice leads, also when it is the kana itself (a third of the author's picks are
-        // the kana: demoting it cost 9 points of top-1 on the log)
+        // the reading itself (plain kana) is one press of Enter away, so the first slot goes to a real
+        // conversion; the kana sentence follows it (log: one-action commits 97.1 -> 97.4 dev, 97.7 -> 98.7 test)
         val top = ranked.first()
-        val lead = top
+        val lead = if (top.surface == reading) ranked.firstOrNull { it.surface != reading && it.surface != Kana.toKatakana(reading) } ?: top else top
         val path = lead.segments
         // the bare kana reading has its own candidate further down; as a word it only wastes a bar slot
         val full = words(reading, limit).filter { it != reading }
         add(Candidate(lead.surface, n, Candidate.Kind.SENTENCE, path))
-        if (lead !== top) add(Candidate(top.surface, n, Candidate.Kind.SENTENCE, top.segments))
         // what the user has picked for this exact reading before, dictionary or not
         history.picks(reading, 3).forEach { add(Candidate(it, n, Candidate.Kind.WORD)) }
         val preds = predictions(reading, context)
@@ -686,6 +685,8 @@ class Converter(
         // nothing converts the reading (ありが, よろし): a word still being typed, so its two best completions
         // come right after it; otherwise the reading is fully spelled and exact conversions come first
         if (top.surface == reading || top.surface == Kana.toKatakana(reading)) preds.take(2).forEach { add(it) }
+        // the kana itself (Enter commits it anyway) after those
+        if (lead !== top) add(Candidate(top.surface, n, Candidate.Kind.SENTENCE, top.segments))
         addAltSentences()
 
         val own = preds.filter { history.count(it.fullReading!!, it.surface) > 0 || userDict.lookup(it.fullReading).any { w -> w.surface == it.surface } }
