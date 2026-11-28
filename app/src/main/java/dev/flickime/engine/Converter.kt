@@ -760,7 +760,8 @@ class Converter(
     }
 
     var predictionsFirst = true
-    var phrasePredictions = true
+    // particle / auxiliary endings (聞いた → 聞いたけど): off at the author's request
+    var phrasePredictions = false
     // ？ / ！ endings: off — on the author's full log (11/23–28) they cost ksr 0.1 / 0.3 pt (dev / test)
     var punctPredictions = false
 
