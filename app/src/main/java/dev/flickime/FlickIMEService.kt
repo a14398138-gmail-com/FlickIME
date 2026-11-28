@@ -1152,6 +1152,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onStartInputView(info: EditorInfo, restarting: Boolean) {
+        rainbow = Prefs.rainbowComposing(this)
         super.onStartInputView(info, restarting)
         // rebuild the view when the theme was switched in settings
         if (::theme.isInitialized && themeKey != Prefs.themeKey(this)) setInputView(onCreateInputView())
@@ -1506,10 +1507,37 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         if (::candRow.isInitialized) renderCandidates()
     }
 
+    // ---- rainbow (a toy): the unconverted text cycles through the hues, flowing left to right ----
+    private var rainbow = false
+    private var rainbowPhase = 0f
+    private val rainbowTick = object : Runnable {
+        override fun run() {
+            if (!rainbow || reading.isEmpty() || selected >= 0) return
+            rainbowPhase = (rainbowPhase + 14f) % 360f
+            showComposing()
+        }
+    }
+
+    private fun rainbowText(t: String): CharSequence = android.text.SpannableString(t).apply {
+        var i = 0
+        while (i < t.length) {
+            val n = Character.charCount(t.codePointAt(i))
+            val hue = ((rainbowPhase - i * 28f) % 360f + 360f) % 360f
+            setSpan(android.text.style.ForegroundColorSpan(Color.HSVToColor(floatArrayOf(hue, 0.85f, 0.95f))), i, i + n, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            i += n
+        }
+        setSpan(android.text.style.UnderlineSpan(), 0, length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        if (segLen in 1 until t.length) setSpan(android.text.style.BackgroundColorSpan(Color.argb(90, 90, 140, 240)), 0, segLen, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+    }
+
     private fun showComposing() {
         if (::keyboard.isInitialized) keyboard.composing = reading.isNotEmpty()
         val ic = currentInputConnection ?: return
-        val text: CharSequence = if (selected >= 0) {
+        main.removeCallbacks(rainbowTick)
+        val text: CharSequence = if (rainbow && selected < 0 && reading.isNotEmpty()) {
+            main.postDelayed(rainbowTick, 70)
+            rainbowText(reading.toString())
+        } else if (selected >= 0) {
             val c = candidates[selected]
             c.surface + reading.substring(c.consumed)
         } else if (segLen in 1 until reading.length) {

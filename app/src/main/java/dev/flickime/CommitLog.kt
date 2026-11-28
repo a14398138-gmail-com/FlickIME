@@ -90,6 +90,8 @@ object Prefs {
     fun floatPos(c: Context) = p(c).getFloat("float_x" + sfx(c), -1f) to p(c).getFloat("float_y" + sfx(c), -1f)
     fun setFloatPos(c: Context, x: Float, y: Float) =
         p(c).edit().putFloat("float_x" + sfx(c), x).putFloat("float_y" + sfx(c), y).apply()
+    fun rainbowComposing(c: Context) = p(c).getBoolean("rainbow", false)
+    fun setRainbowComposing(c: Context, v: Boolean) = p(c).edit().putBoolean("rainbow", v).apply()
     fun zenzEnabled(c: Context) = p(c).getBoolean("zenz", true)
     fun setZenzEnabled(c: Context, v: Boolean) = p(c).edit().putBoolean("zenz", v).apply()
     const val DEFAULT_FLICK_DP = 22

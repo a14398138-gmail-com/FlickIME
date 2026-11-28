@@ -194,6 +194,14 @@ class SettingsActivity : Activity() {
             confirm("クリップボード履歴をすべて削除しますか？") { ClipStore.clear(this); toast("削除しました") }
         })
 
+        col.addView(text("遊び", 20f))
+        col.addView(Switch(this).apply {
+            text = "変換前の文字を虹色に光らせる（流れる）"
+            isChecked = Prefs.rainbowComposing(this@SettingsActivity)
+            setOnCheckedChangeListener { _, v -> Prefs.setRainbowComposing(this@SettingsActivity, v) }
+        })
+        col.addView(text("入力中の文字に色を付けて送り直し続けます。アプリによっては色が付かなかったり、少し重くなったりします。", 13f))
+
         col.addView(text("確定ログ", 20f))
         col.addView(Switch(this).apply {
             text = "確定ログを記録する"
