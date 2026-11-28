@@ -226,6 +226,12 @@ class SettingsActivity : Activity() {
         })
         col.addView(text("書き出したファイルは暗号化されていません。扱いに注意してください。ログの鍵はこの端末のキーストアにあり、アプリを削除すると暗号化ログは読めなくなります。", 13f))
         col.addView(text("辞書: Mozc dictionary_oss（BSD / IPAdic）・SudachiDict（Works Applications, Apache License 2.0）・mecab-ipadic-NEologd（Apache License 2.0）、英単語: JMdict（EDRDG, CC BY-SA 4.0）、wordfreq（CC BY-SA 4.0）、言語モデル: Wikipedia（CC BY-SA）・Tatoeba（CC BY 2.0 FR）・llm-jp-corpus v3 のWeb文（zenz-v2.5-dataset経由、ODC-BY / Common Crawl利用規約）・おーぷん2ちゃんねる対話コーパス（稲葉通将, Apache-2.0）、zenz-v3.2-small（三輪敬太, CC BY-SA 4.0）、llama.cpp（MIT）", 12f))
+        col.addView(button("ライセンス表記を見る") {
+            val body = runCatching { assets.open("licenses.txt").bufferedReader().use { it.readText() } }.getOrDefault("")
+            val tv = TextView(this).apply { text = body; textSize = 12f; setTextIsSelectable(true); setPadding(pad, pad / 2, pad, pad / 2) }
+            android.app.AlertDialog.Builder(this).setTitle("ライセンス").setView(ScrollView(this).apply { addView(tv) })
+                .setPositiveButton("閉じる", null).show()
+        })
         setContentView(ScrollView(this).apply { addView(col) })
     }
 
