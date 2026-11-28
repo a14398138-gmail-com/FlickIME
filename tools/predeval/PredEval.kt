@@ -19,6 +19,8 @@ import java.nio.channels.FileChannel
  *           3 + its length if it is not offered at all. Cost is compared to typing everything + 1 tap.
  *   saved = keystrokes saved when only the exact committed surface counts as a prediction
  *   hit   = targets offered as a prediction before the reading was complete
+ * "In the bar" = visible without scrolling, by width as in ConvEval (BAR_DP dp, default 380); PREDEVAL_BAR=n
+ * switches back to "the first n candidates".
  *   first1 = targets offered from the first character
  *   conv1 = full reading converted to the right surface as the first candidate (regression guard)
  */
@@ -26,7 +28,10 @@ object PredEval {
     private fun map(f: File) = RandomAccessFile(f, "r").use { it.channel.map(FileChannel.MapMode.READ_ONLY, 0, it.length()) }
 
     /** Returns the PREDEVAL line. [out]: optional per-target detail file. */
-    fun run(assets: File, dir: File, split: String = "dev", bar: Int = 5, out: File? = null): String {
+    fun run(assets: File, dir: File, split: String = "dev", bar: Int = 0, out: File? = null): String {
+        // what the bar shows without scrolling: by width like ConvEval (BAR_DP, default 380 dp), or the first [bar]
+        fun visible(c: List<Candidate>) = if (bar > 0) minOf(bar, c.size) else ConvEval.visibleCount(c)
+        fun shownOf(c: List<Candidate>) = c.take(visible(c))
         val conv = Converter(
             Dictionary(map(File(assets, "dict.bin")), map(File(assets, "conn.bin"))),
             Kana.parseTable(File(assets, "en.tsv").readText()), Kana.parseTable(File(assets, "symbols.tsv").readText()),
@@ -53,7 +58,7 @@ object PredEval {
                     val typed = r.substring(0, k)
                     cost++
                     if (k < r.length) {
-                        val pick = conv.candidates(typed, ctx).take(bar).filter {
+                        val pick = shownOf(conv.candidates(typed, ctx)).filter {
                             it.kind == Candidate.Kind.PREDICTION && it.fullReading != null && it.fullReading.length > k &&
                                 r.startsWith(it.fullReading) && sf.startsWith(it.surface)
                         }.maxByOrNull { it.fullReading!!.length }
@@ -63,8 +68,9 @@ object PredEval {
                             continue@outer
                         }
                     } else {
-                        val idx = conv.candidates(typed, ctx).indexOfFirst { it.consumed == typed.length && it.surface == sf }
-                        cost += when { idx in 0 until bar -> 1; idx >= 0 -> 2; else -> 3 + sf.length }
+                        val cands = conv.candidates(typed, ctx)
+                        val idx = cands.indexOfFirst { it.consumed == typed.length && it.surface == sf }
+                        cost += when { idx in 0 until visible(cands) -> 1; idx >= 0 -> 2; else -> 3 + sf.length }
                         break@outer
                     }
                 }
@@ -91,7 +97,7 @@ object PredEval {
                 keys += n
                 var firstAt = -1
                 for (k in 1 until n) {
-                    val shown = conv.candidates(reading.substring(0, k), ctx).take(bar)
+                    val shown = shownOf(conv.candidates(reading.substring(0, k), ctx))
                     if (shown.any { it.kind == Candidate.Kind.PREDICTION && it.surface == surface }) { firstAt = k; break }
                 }
                 if (firstAt > 0) { hit++; saved += n - firstAt; if (firstAt == 1) first1++ }
@@ -119,6 +125,6 @@ object PredEval {
 
     @JvmStatic fun main(args: Array<String>) {
         if (args.size < 2) { System.err.println("usage: PredEval ASSETS_DIR EVAL_DIR [dev|test] [detail-out-file]"); return }
-        println(run(File(args[0]), File(args[1]), args.getOrElse(2) { "dev" }, out = args.getOrNull(3)?.let(::File)))
+        println(run(File(args[0]), File(args[1]), args.getOrElse(2) { "dev" }, bar = System.getenv("PREDEVAL_BAR")?.toIntOrNull() ?: 0, out = args.getOrNull(3)?.let(::File)))
     }
 }

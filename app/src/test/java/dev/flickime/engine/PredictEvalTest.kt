@@ -17,6 +17,6 @@ class PredictEvalTest {
         val dir = System.getenv("EVAL_DIR")?.let(::File)
         assumeTrue(dir != null && File(dir, "events.tsv").exists())
         println(PredEval.run(File("src/main/assets"), dir!!, System.getenv("EVAL_SPLIT") ?: "dev",
-            (System.getenv("EVAL_BAR") ?: "5").toInt(), System.getenv("EVAL_OUT")?.let(::File)))
+            (System.getenv("EVAL_BAR") ?: "0").toInt(), System.getenv("EVAL_OUT")?.let(::File)))
     }
 }
