@@ -1420,6 +1420,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     override fun onUpdateSelection(oldSelStart: Int, oldSelEnd: Int, newSelStart: Int, newSelEnd: Int,
                                    candidatesStart: Int, candidatesEnd: Int) {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+        lastSel = if (newSelStart == newSelEnd) newSelStart else -1
         // While our own commit/composing edits are in flight the editor briefly reports no
         // composing region (candidatesStart < 0); that is not the user moving the cursor.
         val movedOutside = candidatesStart >= 0 &&
@@ -1455,6 +1456,8 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     private var shownComposing = ""
     private var shownCaret = 0
     private var lastComposeAt = 0L
+    /** The editor's cursor as last reported (-1 = a selection / unknown). */
+    private var lastSel = -1
 
     /** Cursor inside the (unconverted) composition, or -1 = at its end. */
     private var cur = -1
@@ -1513,8 +1516,11 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
     private val rainbowTick = object : Runnable {
         override fun run() {
             if (!rainbow || reading.isEmpty() || selected >= 0) return
+            // the user just moved the cursor (a tap to move the boundary) and we have not caught up: re-sending
+            // now would put the cursor back, so wait for the next tick
+            if (composeStart >= 0 && lastSel >= 0 && lastSel != composeStart + shownCaret) { main.postDelayed(this, 70); return }
             rainbowPhase = (rainbowPhase + 14f) % 360f
-            showComposing()
+            showComposing(tick = true)
         }
     }
 
@@ -1530,7 +1536,8 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
         if (segLen in 1 until t.length) setSpan(android.text.style.BackgroundColorSpan(Color.argb(90, 90, 140, 240)), 0, segLen, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
     }
 
-    private fun showComposing() {
+    /** [tick]: only the rainbow's colours changed; not an edit (taps inside the text right after it still count). */
+    private fun showComposing(tick: Boolean = false) {
         if (::keyboard.isInitialized) keyboard.composing = reading.isNotEmpty()
         val ic = currentInputConnection ?: return
         main.removeCallbacks(rainbowTick)
@@ -1548,7 +1555,7 @@ class FlickIMEService : InputMethodService(), KeyboardView.Listener {
             }
         } else reading.toString()
         shownComposing = text.toString()
-        lastComposeAt = android.os.SystemClock.uptimeMillis()
+        if (!tick) lastComposeAt = android.os.SystemClock.uptimeMillis()
         val at = if (selected >= 0) text.length else caret
         if (at < text.length && composeStart < 0) {
             // not reported by the editor yet: work it out from the cursor after placing the text at the end
